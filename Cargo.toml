@@ -1,0 +1,18 @@
+[package]
+name = "tupinject"
+version = "0.1.0"
+authors = ["Arun Sivaramakrishnan <arun.sivaramakrishnan@gmail.com>"]
+
+[lib]
+name = "tupinject"
+path = "lib/mod.rs"
+crate-type=["dylib"]
+
+[dependencies]
+detours-sys={version = "*"}
+widestring="0.4.0"
+# lazy_static = "1.4.0"
+winapi = { version =  "0.3.6", features = ["winnt", "processthreadsapi", "fileapi", "winbase", "synchapi", "handleapi", "libloaderapi"] }
+# kernel32-sys = ">=0.2.2"
+# advapi32-sys = "*"
+# ntapi = {version = "0.3.3"}
