@@ -579,8 +579,9 @@ pub struct TrapInfo
     zDllPath: BigPath,
     payLoad : Payload,
     // zExecDir : BigPath,
-    realentrypoint: *mut EntryPointType,
 }
+static mut REALENTRYPOINT: *mut EntryPointType = std::ptr::null_mut();
+
 pub struct Comm
 {
     csPipe : CRITICAL_SECTION, // Guards access to hPipe.
@@ -629,20 +630,9 @@ impl Payload
 static mut s_hMsvcr : detours::HINSTANCE= std::ptr::null_mut();
 static mut s_pszMsvcr : * const u8 = std::ptr::null_mut();
 static s_rpszMsvcrNames: [&'static str; 14] = [
-    "msvcr80.dll",
-    "msvcr80d.dll",
-    "msvcr71.dll",
-    "msvcr71d.dll",
-    "msvcr70.dll",
-    "msvcr70d.dll",
-    "msvcr90.dll",
-    "msvcr90d.dll",
-    "msvcr100.dll",
-    "msvcr100d.dll",
-    "msvcr110.dll",
-    "msvcr110d.dll",
-    "msvcr120.dll",
-    "msvcr120d.dll"
+    "msvcr80.dll", "msvcr80d.dll", "msvcr71.dll", "msvcr71d.dll", "msvcr70.dll",
+    "msvcr70d.dll", "msvcr90.dll", "msvcr90d.dll", "msvcr100.dll", "msvcr100d.dll",
+    "msvcr110.dll", "msvcr110d.dll", "msvcr120.dll", "msvcr120d.dll"
 ];
 
 pub unsafe extern "C" fn ImportFileCallback(_ :detours::PVOID, hFile :detours::HINSTANCE, pszFile :PCSTR) -> BOOL
@@ -674,22 +664,93 @@ impl TrapInfo
         let ep : *mut EntryPointType = unsafe {detours::DetourGetEntryPoint(std::ptr::null_mut() as _) as _};
         let mut dllPath : BigPath = [0;sizeofBigPath as _];
         unsafe {GetModuleFileNameW(hModule, (&mut dllPath).as_mut_ptr(),   sizeofBigPath );}
-        TrapInfo{hInst: std::ptr::null_mut(), zDllPath: dllPath, payLoad : Payload::findPayLoad(), realentrypoint: ep}
+        unsafe {REALENTRYPOINT = ep};
+        TrapInfo{hInst: std::ptr::null_mut(), zDllPath: dllPath, payLoad : Payload::findPayLoad()}
     }
 
-    pub unsafe fn attach(&self) 
+    pub unsafe fn attach(&self)
     {
         detours::DetourUpdateThread(GetCurrentThread() as _);
         use detours::DetourAttach;
         let ptrap = &TrapEntryPoint as *const _;
-        DetourAttach(self.realentrypoint as _, ptrap as _ );
+        DetourAttach(REALENTRYPOINT as _, ptrap as _ );
         DetourAttach(&CopyFileExA as *const _  as _, (&TrapCopyFileExA as *const _) as _ );
+        DetourAttach(&CopyFileExW as *const _ as _, (&TrapCopyFileExW as *const _) as _ );
+        DetourAttach(&DeleteFileA as *const _ as _, (&TrapDeleteFileA as *const _) as _);
+        DetourAttach(&DeleteFileW as *const _ as _, (&TrapDeleteFileW as *const _) as _ );
+        DetourAttach(&FindFirstFileA as *const _ as _, (&TrapFindFirstFileA as *const _) as _ );
+        DetourAttach(&FindFirstFileW as *const _ as _, (&TrapFindFirstFileW as *const _) as _ );
+        DetourAttach(&FindFirstFileExA as *const _ as _, (&TrapFindFirstFileExA as *const _) as _ );
+        DetourAttach(&FindFirstFileExW as *const _ as _, (&TrapFindFirstFileExW as *const _) as _ );
+        DetourAttach(&GetFileAttributesA as *const _ as _, (&TrapGetFileAttributesA as *const _) as _);
+        DetourAttach(&GetFileAttributesW as *const _ as _, (&TrapGetFileAttributesW as *const _) as _);
+        DetourAttach(&GetFileAttributesExA as *const _ as _, (&TrapGetFileAttributesExA as *const _) as _);
+        DetourAttach(&GetFileAttributesExW as *const _ as _, (&TrapGetFileAttributesExW as *const _) as _);
 
+        DetourAttach(&SetFileAttributesA as *const _ as _, (&TrapSetFileAttributesA as *const _) as _);
+        DetourAttach(&SetFileAttributesW as *const _ as _, (&TrapSetFileAttributesW as *const _) as _);
+
+        DetourAttach(&CreateFileA as *const _ as _, (&TrapCreateFileA as *const _) as _);
+        DetourAttach(&CreateFileW as *const _ as _, (&TrapCreateFileW as *const _) as _);
+
+        DetourAttach(&CopyFile2 as *const _ as _, (&TrapCopyFile2 as *const _) as _);
+        DetourAttach(&CopyFileA as *const _ as _, (&TrapCopyFileA as *const _) as _);
+        DetourAttach(&CopyFileW as *const _ as _, (&TrapCopyFileW as *const _) as _);
+        DetourAttach(&CopyFileExA as *const _ as _, (&TrapCopyFileExA as *const _) as _);
+        DetourAttach(&CopyFileExW as *const _ as _, (&TrapCopyFileExW as *const _) as _);
+        DetourAttach(&CopyFileTransactedA as *const _ as _, (&TrapCopyFileTransactedA as *const _) as _);
+        DetourAttach(&CopyFileTransactedW as *const _ as _, (&TrapCopyFileTransactedW as *const _) as _);
+        DetourAttach(&ReplaceFileA as *const _ as _, (&TrapReplaceFileA as *const _) as _);
+        DetourAttach(&ReplaceFileW as *const _ as _, (&TrapReplaceFileW as *const _) as _);
+        DetourAttach(&MoveFileA as *const _ as _, (&TrapMoveFileA as *const _) as _);
+        DetourAttach(&MoveFileW as *const _ as _, (&TrapMoveFileW as *const _) as _);
+        DetourAttach(&MoveFileExA as *const _ as _, (&TrapMoveFileExA as *const _) as _);
+        DetourAttach(&MoveFileExW as *const _ as _, (&TrapMoveFileExW as *const _) as _);
+        DetourAttach(&OpenFile as *const _ as _, (&TrapOpenFile as *const _) as _);
+        DetourAttach(&CreateProcessA as *const _ as _, (&TrapCreateProcessA as *const _) as _);
+        DetourAttach(&CreateProcessW as *const _ as _, (&TrapCreateProcessW as *const _) as _);
     }
 
     pub unsafe fn detach(&self)
     {
+        use detours::DetourDetach;
+        let ptrap = &TrapEntryPoint as *const _;
+        DetourDetach(REALENTRYPOINT as _, ptrap as _ );
+        DetourDetach(&CopyFileExA as *const _  as _, (&TrapCopyFileExA as *const _) as _ );
+        DetourDetach(&CopyFileExW as *const _ as _, (&TrapCopyFileExW as *const _) as _ );
+        DetourDetach(&DeleteFileA as *const _ as _, (&TrapDeleteFileA as *const _) as _);
+        DetourDetach(&DeleteFileW as *const _ as _, (&TrapDeleteFileW as *const _) as _ );
+        DetourDetach(&FindFirstFileA as *const _ as _, (&TrapFindFirstFileA as *const _) as _ );
+        DetourDetach(&FindFirstFileW as *const _ as _, (&TrapFindFirstFileW as *const _) as _ );
+        DetourDetach(&FindFirstFileExA as *const _ as _, (&TrapFindFirstFileExA as *const _) as _ );
+        DetourDetach(&FindFirstFileExW as *const _ as _, (&TrapFindFirstFileExW as *const _) as _ );
+        DetourDetach(&GetFileAttributesA as *const _ as _, (&TrapGetFileAttributesA as *const _) as _);
+        DetourDetach(&GetFileAttributesW as *const _ as _, (&TrapGetFileAttributesW as *const _) as _);
+        DetourDetach(&GetFileAttributesExA as *const _ as _, (&TrapGetFileAttributesExA as *const _) as _);
+        DetourDetach(&GetFileAttributesExW as *const _ as _, (&TrapGetFileAttributesExW as *const _) as _);
 
+        DetourDetach(&SetFileAttributesA as *const _ as _, (&TrapSetFileAttributesA as *const _) as _);
+        DetourDetach(&SetFileAttributesW as *const _ as _, (&TrapSetFileAttributesW as *const _) as _);
+
+        DetourDetach(&CreateFileA as *const _ as _, (&TrapCreateFileA as *const _) as _);
+        DetourDetach(&CreateFileW as *const _ as _, (&TrapCreateFileW as *const _) as _);
+
+        DetourDetach(&CopyFile2 as *const _ as _, (&TrapCopyFile2 as *const _) as _);
+        DetourDetach(&CopyFileA as *const _ as _, (&TrapCopyFileA as *const _) as _);
+        DetourDetach(&CopyFileW as *const _ as _, (&TrapCopyFileW as *const _) as _);
+        DetourDetach(&CopyFileExA as *const _ as _, (&TrapCopyFileExA as *const _) as _);
+        DetourDetach(&CopyFileExW as *const _ as _, (&TrapCopyFileExW as *const _) as _);
+        DetourDetach(&CopyFileTransactedA as *const _ as _, (&TrapCopyFileTransactedA as *const _) as _);
+        DetourDetach(&CopyFileTransactedW as *const _ as _, (&TrapCopyFileTransactedW as *const _) as _);
+        DetourDetach(&ReplaceFileA as *const _ as _, (&TrapReplaceFileA as *const _) as _);
+        DetourDetach(&ReplaceFileW as *const _ as _, (&TrapReplaceFileW as *const _) as _);
+        DetourDetach(&MoveFileA as *const _ as _, (&TrapMoveFileA as *const _) as _);
+        DetourDetach(&MoveFileW as *const _ as _, (&TrapMoveFileW as *const _) as _);
+        DetourDetach(&MoveFileExA as *const _ as _, (&TrapMoveFileExA as *const _) as _);
+        DetourDetach(&MoveFileExW as *const _ as _, (&TrapMoveFileExW as *const _) as _);
+        DetourDetach(&OpenFile as *const _ as _, (&TrapOpenFile as *const _) as _);
+        DetourDetach(&CreateProcessA as *const _ as _, (&TrapCreateProcessA as *const _) as _);
+        DetourDetach(&CreateProcessW as *const _ as _, (&TrapCreateProcessW as *const _) as _);
     }
 }
 type Real_wgetenvType =  unsafe extern "C" fn(var: PCWSTR) ->PCWSTR;
@@ -698,57 +759,101 @@ type Real_getenv_sType =  unsafe extern "C" fn(pValue :*mut DWORD, pBuffer :PCHA
 type Real_wgetenv_sType =  unsafe extern "C" fn(pValue :*mut DWORD, pBuffer :PWCHAR, cBuffer: DWORD, varname :PCWSTR) ->DWORD;
 type Real_dupenv_sType =  unsafe extern "C" fn(ppBuffer :*mut PCHAR, pcBuffer :*mut DWORD, varname :PCSTR) ->DWORD;
 type Real_wdupenv_sType =  unsafe extern "C" fn(ppBuffer :*mut PWCHAR, pcBuffer :*mut DWORD, varname: PCWSTR) ->DWORD;
-static mut real_getenv: *mut Real_getenvType = std::ptr::null_mut() as _;
-static mut real_wgetenv:*mut Real_wgetenvType = std::ptr::null_mut() as _;
-static mut real_getenv_s : *mut Real_getenv_sType = std::ptr::null_mut() as _;
-static mut real_wgetenv_s: *mut Real_wgetenv_sType = std::ptr::null_mut() as _;
-static mut real_dupenv_s: *mut Real_dupenv_sType = std::ptr::null_mut() as _;
-static mut real_wdupenv_s: *mut Real_wdupenv_sType = std::ptr::null_mut() as _;
+static mut REAL_GETENV: *mut Real_getenvType = std::ptr::null_mut() as _;
+static mut REAL_WGETENV:*mut Real_wgetenvType = std::ptr::null_mut() as _;
+static mut REAL_GETENV_S : *mut Real_getenv_sType = std::ptr::null_mut() as _;
+static mut REAL_WGETENV_S: *mut Real_wgetenv_sType = std::ptr::null_mut() as _;
+static mut REAL_DUPENV_S: *mut Real_dupenv_sType = std::ptr::null_mut() as _;
+static mut REAL_WDUPENV_S: *mut Real_wdupenv_sType = std::ptr::null_mut() as _;
+fn record_env(var: PCSTR) -> std::result::Result<usize, Error>
+{
+    let pid = unsafe { GetCurrentProcessId() };
+    use std::fs::File;
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    let mut file: File = OpenOptions::new()
+        .append(true)
+        .open(format!("evts-env-{}.txt", pid))?;
+    // let name = std::str::from_utf8(lpFileName).unwrap();
+    let fname = unsafe { CStr::from_ptr(var).to_str().unwrap() };
+    file.write(fname.as_bytes())?;
+    file.write(b"\n")
+}
 
+fn record_env_wide(var: PCWSTR) -> std::result::Result<usize, Error>
+{
+    let pid = unsafe { GetCurrentProcessId()};
+    use std::fs::File;
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    let mut file : File = OpenOptions::new()
+        .append(true)
+        .open(format!("evts-env-{}.txt", pid))?;
+
+    let p = { var as *const u16 };
+    let mut len = 0;
+    unsafe {
+        while *p.offset(len) != 0 {
+            len += 1;
+        }
+    }
+    let name = unsafe { std::slice::from_raw_parts(p as *const u16, len as usize) };
+    let u16str: OsString = OsStringExt::from_wide(name);
+    file.write(u16str.to_str().unwrap().as_bytes())?;
+    file.write(b"\n")
+}
 pub unsafe extern "C" fn Mine_wgetenv(var : PCWSTR) -> PCWSTR
 {
-    (*real_wgetenv)(var)
+    record_env_wide(var);
+    (*REAL_WGETENV)(var)
+
 }
 pub unsafe extern "C" fn Mine_getenv(var: PCSTR)-> PCSTR
 {
-    (*real_getenv)(var)
+    record_env(var);
+    (*REAL_GETENV)(var)
 }
 
 pub unsafe extern "C" fn Mine_getenv_s(pValue : *mut DWORD, pBuffer: PCHAR, cBuffer : DWORD, varname : PCSTR)-> DWORD
 {
-    (*real_getenv_s)(pValue, pBuffer, cBuffer, varname)
+    record_env(varname);
+    (*REAL_GETENV_S)(pValue, pBuffer, cBuffer, varname)
 }
 pub unsafe extern "C" fn Mine_wgetenv_s(pValue : *mut DWORD, pBuffer: PWCHAR, cBuffer : DWORD, varname : PCWSTR)-> DWORD
 {
-    (*real_wgetenv_s)(pValue, pBuffer, cBuffer, varname)
+    record_env_wide(varname);
+    (*REAL_WGETENV_S)(pValue, pBuffer, cBuffer, varname)
 }
 unsafe extern "C" fn Mine_dupenv_s(ppBuffer :*mut PCHAR, pcBuffer :*mut DWORD, varname :PCSTR) ->DWORD
 {
-    (*real_dupenv_s)(ppBuffer, pcBuffer, varname)
+    record_env(varname);
+    (*REAL_DUPENV_S)(ppBuffer, pcBuffer, varname)
 }
 unsafe extern "C" fn Mine_wdupeenv_s(ppBuffer :*mut PWCHAR, pcBuffer :*mut DWORD, varname: PCWSTR) ->DWORD
 {
-    (*real_wdupenv_s)(ppBuffer, pcBuffer, varname)
+    record_env_wide(varname);
+    (*REAL_WDUPENV_S)(ppBuffer, pcBuffer, varname)
 }
  unsafe extern "system" fn TrapEntryPoint ()
 {
+    (*REALENTRYPOINT)();
     if FindMsvcr()  {
-        real_getenv = GetProcAddress(s_hMsvcr as _, "getenv\0".as_ptr() as _) as _;
-        real_wgetenv = GetProcAddress(s_hMsvcr as _, "_wgetenv\0".as_ptr() as _ ) as _;
-        real_getenv_s = GetProcAddress(s_hMsvcr as _, "getenv_s\0".as_ptr() as _) as _;
-        real_wgetenv_s = GetProcAddress(s_hMsvcr as _, "_wgetenv_s\0".as_ptr() as _) as _;
-        real_dupenv_s = GetProcAddress(s_hMsvcr as _, "_dupenv_s\0".as_ptr() as _) as _;
-        real_wdupenv_s = GetProcAddress(s_hMsvcr as _, "_wdupenv_s\0".as_ptr() as _) as _;
+        REAL_GETENV = GetProcAddress(s_hMsvcr as _, "getenv\0".as_ptr() as _) as _;
+        REAL_WGETENV = GetProcAddress(s_hMsvcr as _, "_wgetenv\0".as_ptr() as _ ) as _;
+        REAL_GETENV_S = GetProcAddress(s_hMsvcr as _, "getenv_s\0".as_ptr() as _) as _;
+        REAL_WGETENV_S = GetProcAddress(s_hMsvcr as _, "_wgetenv_s\0".as_ptr() as _) as _;
+        REAL_DUPENV_S = GetProcAddress(s_hMsvcr as _, "_dupenv_s\0".as_ptr() as _) as _;
+        REAL_WDUPENV_S = GetProcAddress(s_hMsvcr as _, "_wdupenv_s\0".as_ptr() as _) as _;
 
         detours::DetourTransactionBegin();
         detours::DetourUpdateThread(GetCurrentThread() as _);
 
-        detours::DetourAttach(real_getenv as _, ((&Mine_getenv) as *const _) as _);
-        detours::DetourAttach(real_getenv_s as _, (&Mine_getenv_s as *const _) as _);
-        detours::DetourAttach(real_wgetenv as _, (&Mine_wgetenv as *const _) as _);
-        detours::DetourAttach(real_wgetenv as _, (&Mine_wgetenv_s as *const _) as _);
-        detours::DetourAttach(real_dupenv_s as _, (&Mine_dupenv_s as *const _) as _);
-        detours::DetourAttach(real_wdupenv_s as _, (&Mine_wdupeenv_s as *const _) as _);
+        detours::DetourAttach(REAL_GETENV as _, ((&Mine_getenv) as *const _) as _);
+        detours::DetourAttach(REAL_GETENV_S as _, (&Mine_getenv_s as *const _) as _);
+        detours::DetourAttach(REAL_WGETENV as _, (&Mine_wgetenv as *const _) as _);
+        detours::DetourAttach(REAL_WGETENV as _, (&Mine_wgetenv_s as *const _) as _);
+        detours::DetourAttach(REAL_DUPENV_S as _, (&Mine_dupenv_s as *const _) as _);
+        detours::DetourAttach(REAL_WDUPENV_S as _, (&Mine_wdupeenv_s as *const _) as _);
         detours::DetourTransactionCommit();
     }
 }
