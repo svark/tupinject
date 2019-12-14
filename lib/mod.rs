@@ -52,9 +52,9 @@ impl Drop for DetoursTransaction {
 }
 
 impl DetoursProcessor {
-    pub fn new(hMod: HMODULE) -> DetoursProcessor {
+    pub fn new(hmod: HMODULE) -> DetoursProcessor {
         let processor = DetoursProcessor {
-            trap_info: traps::TrapInfo::new(hMod),
+            trap_info: traps::TrapInfo::new(hmod),
         };
         // let functions: HookMapT = vec![];
         // for func in functions.iter() {
