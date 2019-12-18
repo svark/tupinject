@@ -1,21 +1,15 @@
 extern crate detours_sys as detours;
-
-// #[cfg(windows)]
-// extern crate ntapi;
-// extern crate kernel32;
-// extern crate advapi32;
-
-#[cfg(windows)]
+extern crate named_pipe;
 #[macro_use]
+extern crate wstr;
+#[cfg(windows)]
+// #[macro_use]
 extern crate winapi;
-
 // pub mod injectdylib;
 use std::io::Error;
 #[cfg(windows)]
 use winapi::{
-    shared::minwindef::{BOOL, DWORD, FALSE, HINSTANCE, LPVOID, TRUE,
-                        HMODULE
-    },
+    shared::minwindef::{BOOL, DWORD, FALSE, HINSTANCE, HMODULE, LPVOID, TRUE},
     um::processthreadsapi::GetCurrentThread,
     um::winnt::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH},
 };
@@ -24,19 +18,18 @@ pub mod traps;
 pub trait IHookProcessor {
     fn need_skip(&self) -> bool;
     fn attach_hooks(&self) -> Result<(), Error>;
-    fn detach_hooks(&self);
+    fn detach_hooks(&self) -> Result<(), Error>;
 }
-// type HookMapT = Vec<(*mut LPVOID, LPVOID)>;
-// use std::collections::HashMap;
-// type FunctionMapT = HashMap<LPVOID, *mut LPVOID>;
+
+#[derive(Default)]
 struct DetoursProcessor {
-    trap_info : traps::TrapInfo,
-    // m_function_map: FunctionMapT,
+    trap_info: traps::TrapInfo,
 }
 struct DetoursTransaction;
 impl DetoursTransaction {
     pub fn new() -> Result<DetoursTransaction, Error> {
         if unsafe { detours::DetourTransactionBegin() } != 0 {
+            println!("error!");
             return Err(Error::last_os_error());
         }
         if unsafe { detours::DetourUpdateThread(GetCurrentThread() as _) } != 0 {
@@ -44,31 +37,23 @@ impl DetoursTransaction {
         }
         Ok(DetoursTransaction)
     }
-}
-impl Drop for DetoursTransaction {
-    fn drop(&mut self) {
+
+    pub fn commit(&self) {
         unsafe { detours::DetourTransactionCommit() };
     }
 }
-
 impl DetoursProcessor {
     pub fn new(hmod: HMODULE) -> DetoursProcessor {
         let processor = DetoursProcessor {
             trap_info: traps::TrapInfo::new(hmod),
         };
-        // let functions: HookMapT = vec![];
-        // for func in functions.iter() {
-        //     processor.setup_trap(func.0, func.1);
-        // }
         processor
     }
-    pub fn attach(&self)
-    {
-        unsafe {self.trap_info.attach()};
+    pub fn attach(&self, _: &DetoursTransaction) {
+        unsafe { self.trap_info.attach() };
     }
-    pub fn detach(&self)
-    {
-        unsafe {self.trap_info.detach()};
+    pub fn detach(&self, _: &DetoursTransaction) {
+        unsafe { self.trap_info.detach() };
     }
 }
 impl IHookProcessor for DetoursProcessor {
@@ -81,27 +66,39 @@ impl IHookProcessor for DetoursProcessor {
             return Err(Error::last_os_error());
         }
 
-        let _ = DetoursTransaction::new();
-        self.attach();
+        let trans = DetoursTransaction::new()?;
+        self.attach(&trans);
+        trans.commit();
         Ok(())
     }
-    fn detach_hooks(&self) {
-        let _ = DetoursTransaction::new();
-        self.detach();
+    fn detach_hooks(&self) -> Result<(), Error> {
+        let trans = DetoursTransaction::new()?;
+        self.detach(&trans);
+        trans.commit();
+        Ok(())
     }
 }
-pub fn dll_processor(processor: &mut impl IHookProcessor, reason: DWORD) -> BOOL {
-    if processor.need_skip() {
-        return TRUE;
-    }
+pub fn dll_processor(dll_module: HINSTANCE, reason: DWORD) -> BOOL {
+    // let inst :HMODULE = 0 as _;
+
     match reason {
         DLL_PROCESS_ATTACH => {
-            if let Err(_) = processor.attach_hooks() {
+            let processor = DetoursProcessor::new(dll_module);
+            if (processor).need_skip() {
+                return TRUE;
+            }
+            if let Err(_) = (processor).attach_hooks() {
                 return FALSE;
             }
         }
         DLL_PROCESS_DETACH => {
-            processor.detach_hooks();
+            let processor = DetoursProcessor::new(dll_module);
+            if processor.need_skip() {
+                return TRUE;
+            }
+            if let Err(_) = processor.detach_hooks() {
+                return FALSE;
+            }
         }
         _ => {
             return FALSE;
@@ -113,6 +110,5 @@ pub fn dll_processor(processor: &mut impl IHookProcessor, reason: DWORD) -> BOOL
 #[no_mangle]
 #[allow(non_snake_case, unused_variables)]
 extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: LPVOID) -> BOOL {
-    let mut detours_processor: DetoursProcessor = DetoursProcessor::new(dll_module);
-    dll_processor(&mut detours_processor, call_reason)
+    dll_processor(dll_module, call_reason)
 }
