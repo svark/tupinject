@@ -1,60 +1,43 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
-// use winapi::um::fileapi::{CreateFileA, CreateFileW};
-// use winapi::um::fileapi::{DeleteFileA, DeleteFileW};
-// use winapi::um::fileapi::{FindFirstFileA, FindFirstFileW};
-// use winapi::um::fileapi::{FindFirstFileExA, FindFirstFileExW};
-// use winapi::um::fileapi::{GetFileAttributesA, GetFileAttributesW};
-// use winapi::um::fileapi::{GetFileAttributesExA, GetFileAttributesExW};
-// use winapi::um::fileapi::{
-//     SetFileAttributesA,
-//     SetFileAttributesW,
 //     //TODO:                          SetFileInformationByHandle
-// };
+use named_pipe::PipeClient;
+use std::io::Write;
+use winapi::um::libloaderapi::{GetModuleFileNameA, GetModuleFileNameW};
+use winapi::um::processthreadsapi::{GetCurrentProcessId, GetCurrentThread};
 use winapi::um::processthreadsapi::{
-    GetCurrentProcessId, GetCurrentThread};
-use winapi::um::processthreadsapi::{LPPROCESS_INFORMATION, LPSTARTUPINFOA, LPSTARTUPINFOW};
-// use winapi::um::winbase::{
-//     CopyFile2, CopyFileA, CopyFileExA, CopyFileExW, CopyFileTransactedA, CopyFileTransactedW,
-//     CopyFileW, MoveFileA, MoveFileExA, MoveFileExW, MoveFileW, OpenFile, ReplaceFileA,
-//     ReplaceFileW};
- use named_pipe::PipeClient;
- use std::io::{Write};
+    LPPROCESS_INFORMATION, LPSTARTUPINFOA, LPSTARTUPINFOW, PROCESS_INFORMATION,
+};
+use winapi::{
+    shared::guiddef::GUID,
+    um::handleapi::INVALID_HANDLE_VALUE,
+    um::libloaderapi::{GetModuleHandleW, GetProcAddress},
+};
 use winapi::{
     shared::minwindef::{
         BOOL,
         DWORD,
         FALSE,
-        HMODULE, //PDWORD, PUCHAR,
+        FARPROC,
         HINSTANCE,
+        HMODULE, //PDWORD, PUCHAR,
         LPBOOL,
         LPVOID,
         TRUE,
         // TRUE, UCHAR,
         UINT,
         ULONG,
-        FARPROC
     },
     um::minwinbase::{
-        // CRITICAL_SECTION,
-        FINDEX_INFO_LEVELS, FINDEX_SEARCH_OPS, GET_FILEEX_INFO_LEVELS,
-        LPSECURITY_ATTRIBUTES, LPWIN32_FIND_DATAA, LPWIN32_FIND_DATAW,
+        FINDEX_INFO_LEVELS, FINDEX_SEARCH_OPS, GET_FILEEX_INFO_LEVELS, LPSECURITY_ATTRIBUTES,
+        LPWIN32_FIND_DATAA, LPWIN32_FIND_DATAW,
     },
     um::winbase::{COPYFILE2_EXTENDED_PARAMETERS, LPOFSTRUCT, LPPROGRESS_ROUTINE},
     um::winnt::{
-        DELETE, FILE_GENERIC_WRITE, GENERIC_WRITE, HANDLE, HRESULT, LPCSTR, LPCWSTR, LPSTR, LPWSTR,
-        PCHAR, PCSTR, PCWSTR, PWCHAR, WCHAR, WRITE_DAC, WRITE_OWNER, PVOID,
+        CHAR, DELETE, FILE_GENERIC_WRITE, GENERIC_WRITE, HANDLE, HRESULT, LPCSTR, LPCWSTR, LPSTR,
+        LPWSTR, PCHAR, PCSTR, PCWSTR, PVOID, PWCHAR, WCHAR, WRITE_DAC, WRITE_OWNER,
     },
     // um::synchapi::{InitializeCriticalSection},
-};
-use winapi::{
-    // um::fileapi::{
-    //     CREATEFILE2_EXTENDED_PARAMETERS, LPBY_HANDLE_FILE_INFORMATION,
-    // },
-    // um::fileapi::{CREATE_ALWAYS, CREATE_NEW, OPEN_ALWAYS, OPEN_EXISTING, TRUNCATE_EXISTING},
-    um::handleapi::INVALID_HANDLE_VALUE,
-    um::libloaderapi::{GetProcAddress, GetModuleHandleW},
-    shared::guiddef::GUID,
 };
 // {9640B7B0-CA4D-4D61-9A27-79C709A31EB0}
 pub static S_TRAP_GUID: GUID = GUID {
@@ -94,6 +77,7 @@ pub(crate) enum FileEventType {
     Read,
     Write,
     Unlink,
+    Exec,
     // ReadVar,
 }
 impl ToString for FileEventType {
@@ -102,14 +86,14 @@ impl ToString for FileEventType {
     }
 }
 
-static mut REAL_DELETEFILEA : FARPROC = std::ptr::null_mut() as _;
-static mut REAL_DELETEFILEW  : FARPROC = std::ptr::null_mut() as _;
-static mut REAL_FINDFIRSTFILEA : FARPROC = std::ptr::null_mut() as _;
-static mut REAL_FINDFIRSTFILEW : FARPROC = std::ptr::null_mut() as _;
-static mut REAL_FINDFIRSTFILEEXA : FARPROC = std::ptr::null_mut() as _;
-static mut REAL_FINDFIRSTFILEEXW : FARPROC = std::ptr::null_mut() as _;
-static mut REAL_GETFILEATTRIBUTESA : FARPROC = std::ptr::null_mut() as _;
-static mut REAL_GETFILEATTRIBUTESW : FARPROC = std::ptr::null_mut() as _;
+static mut REAL_DELETEFILEA: FARPROC = std::ptr::null_mut() as _;
+static mut REAL_DELETEFILEW: FARPROC = std::ptr::null_mut() as _;
+static mut REAL_FINDFIRSTFILEA: FARPROC = std::ptr::null_mut() as _;
+static mut REAL_FINDFIRSTFILEW: FARPROC = std::ptr::null_mut() as _;
+static mut REAL_FINDFIRSTFILEEXA: FARPROC = std::ptr::null_mut() as _;
+static mut REAL_FINDFIRSTFILEEXW: FARPROC = std::ptr::null_mut() as _;
+static mut REAL_GETFILEATTRIBUTESA: FARPROC = std::ptr::null_mut() as _;
+static mut REAL_GETFILEATTRIBUTESW: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_GETFILEATTRIBUTESEXA: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_GETFILEATTRIBUTESEXW: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_SETFILEATTRIBUTESA: FARPROC = std::ptr::null_mut() as _;
@@ -132,17 +116,11 @@ static mut REAL_MOVEFILEEXW: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_OPENFILE: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_CREATEPROCESSA: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_CREATEPROCESSW: FARPROC = std::ptr::null_mut() as _;
-static mut RRECORD : bool = true;
 //
 fn record_event(lpFileName: LPCSTR, evt: FileEventType) -> std::result::Result<usize, Error> {
-    unsafe {
-    if !RRECORD {
-	      return Ok(0);
-    }
-    }
     let pid = unsafe { GetCurrentProcessId() };
     let fname = unsafe { CStr::from_ptr(lpFileName).to_str().unwrap() };
-	  // println!("{}from pid:{}", fname, pid);
+    // println!("{}\t{}\t{}\n", fname, pid.to_string(), evt.to_string());
     // use std::fs::File;
     // use std::fs::OpenOptions;
     // use std::io::Write;
@@ -150,64 +128,86 @@ fn record_event(lpFileName: LPCSTR, evt: FileEventType) -> std::result::Result<u
     //     .append(true)
     //     .open(format!("c:\\temp\\evts-{}.txt", pid))?;
     // let name = std::str::from_utf8(lpFileName).unwrap();
-    let mut client = PipeClient::connect_ms(TBLOG_PIPE_NAME, 0)?;
-    // file.write(fname.as_bytes())?;
-    // file.write(b"\n")?;
-    // file.write(evt.to_string().as_bytes())
-    client.write(fname.as_bytes())?;
-    client.write("\n".as_bytes())?;
-    client.write(pid.to_string().as_bytes())?;
-    client.write("\n".as_bytes())?;
-    client.write(evt.to_string().as_bytes())?;
-    client.write("\n".as_bytes())
-    // Ok(1)
+    // eprintln!("{},{}, {}\n", fname, pid, evt.to_string());
+    let print = || -> std::result::Result<usize, Error> {
+        let mut client = PipeClient::connect(TBLOG_PIPE_NAME)?;
+        // eprintln!("{}\n", "done" );
+
+        client.write(
+            format!(
+                "------\n{}\t{},\t{}----*----\n",
+                fname,
+                pid.to_string(),
+                evt.to_string()
+            )
+            .as_bytes(),
+        )
+    };
+    // eprintln!("{}---?---\n", evt.to_string());
+    let mut iter = 0;
+    while let Err(err) = print() {
+        std::thread::sleep(std::time::Duration::new(0, 10));
+        iter = iter + 1;
+        if iter > 5 {
+            return Err(err);
+        }
+    }
+    Ok(1)
 }
 // wide string version of the above
 fn record_event_wide(lpFileName: LPCWSTR, evt: FileEventType) -> std::result::Result<usize, Error> {
-    unsafe {if !RRECORD {
-	      return Ok(0);
-    }
-    }
     let pid = unsafe { GetCurrentProcessId() };
-    // use std::io::Write;
     let p = { lpFileName as *const u16 };
     let mut len = 0;
-	//println("{}", lpFileName);
-     unsafe {
-         while *p.offset(len) != 0 {
-             len += 1;
-         }
+    unsafe {
+        while *p.offset(len) != 0 {
+            len += 1;
+        }
     }
-     let name = unsafe { std::slice::from_raw_parts(p as *const u16, len as usize) };
-     let u16str: OsString = OsStringExt::from_wide(name);
-	 // println!("{}", u16str.to_str().unwrap());
-    let mut client = PipeClient::connect_ms(TBLOG_PIPE_NAME, 0)?;
-    client.write(u16str.to_str().unwrap().as_bytes())?;
-    client.write("\n".as_bytes())?;
-    client.write(pid.to_string().as_bytes())?;
-    client.write("\n".as_bytes())?;
-    client.write(evt.to_string().as_bytes())?;
-    client.write("\n".as_bytes())
-    // Ok(1)
+    let name = unsafe { std::slice::from_raw_parts(p as *const u16, len as usize) };
+    let u16str: OsString = OsStringExt::from_wide(name);
+    let print = || -> std::result::Result<usize, Error> {
+        let mut client = PipeClient::connect(TBLOG_PIPE_NAME)?;
+        // eprintln!("{}\n", "connected" );
+        client.write(
+            format!(
+                "----\n{}\t{}\t{}----*-----\n",
+                u16str.to_str().unwrap(),
+                pid.to_string(),
+                evt.to_string()
+            )
+            .as_bytes(),
+        )
+    };
+    let mut iter = 0;
+    while let Err(err) = print() {
+        std::thread::sleep(std::time::Duration::new(0, 10));
+        iter = iter + 1;
+        if iter > 5 {
+            return Err(err);
+        }
+    }
+    Ok(1)
 }
 
 unsafe extern "system" fn TrapDeleteFileA(lpFileName: LPCSTR) -> BOOL {
-    type ProcType = unsafe extern "system" fn (lpFileName: LPCSTR) -> BOOL ;
-    let realapi : ProcType = std::mem::transmute(REAL_DELETEFILEA);
+    type ProcType = unsafe extern "system" fn(lpFileName: LPCSTR) -> BOOL;
+    let realapi: ProcType = std::mem::transmute(REAL_DELETEFILEA);
     let ret = realapi(lpFileName);
     if ret != FALSE {
-        let _ = record_event(lpFileName,  FileEventType::Unlink);
+        let _ = record_event(lpFileName, FileEventType::Unlink);
     }
     ret
 }
 
 unsafe extern "system" fn TrapDeleteFileW(lpFileName: LPCWSTR) -> BOOL {
-    type ProcType =unsafe extern "system" fn (lpFileName: LPCWSTR) -> BOOL ;
-    let realapi : ProcType = std::mem::transmute(REAL_DELETEFILEW);
+    type ProcType = unsafe extern "system" fn(lpFileName: LPCWSTR) -> BOOL;
+    let realapi: ProcType = std::mem::transmute(REAL_DELETEFILEW);
 
     let ret = realapi(lpFileName);
     if ret != FALSE {
-        let _ = record_event_wide(lpFileName, FileEventType::Unlink);
+        let _ = record_event_wide(lpFileName, FileEventType::Unlink)
+            .map_err(|x| eprintln!("record failed in deletefilew:{}", x));
     }
     ret
 }
@@ -215,11 +215,9 @@ unsafe extern "system" fn TrapFindFirstFileA(
     lpFileName: LPCSTR,
     lpFindFileData: LPWIN32_FIND_DATAA,
 ) -> HANDLE {
-    type ProcType = extern "system" fn (
-        lpFileName: LPCSTR,
-        lpFindFileData: LPWIN32_FIND_DATAA,
-    ) -> HANDLE ;
-    let realapi : ProcType = std::mem::transmute(REAL_FINDFIRSTFILEA);
+    type ProcType =
+        extern "system" fn(lpFileName: LPCSTR, lpFindFileData: LPWIN32_FIND_DATAA) -> HANDLE;
+    let realapi: ProcType = std::mem::transmute(REAL_FINDFIRSTFILEA);
 
     let ret = realapi(lpFileName, lpFindFileData);
     if ret != INVALID_HANDLE_VALUE {
@@ -231,14 +229,15 @@ unsafe extern "system" fn TrapFindFirstFileW(
     lpFileName: LPCWSTR,
     lpFindFileData: LPWIN32_FIND_DATAW,
 ) -> HANDLE {
-    type ProcType =unsafe extern "system" fn (
+    type ProcType = unsafe extern "system" fn(
         lpFileName: LPCWSTR,
         lpFindFileData: LPWIN32_FIND_DATAW,
-    ) -> HANDLE ;
-    let realapi : ProcType = std::mem::transmute(REAL_FINDFIRSTFILEW);
+    ) -> HANDLE;
+    let realapi: ProcType = std::mem::transmute(REAL_FINDFIRSTFILEW);
 
     let ret = realapi(lpFileName, lpFindFileData);
-    let _ = record_event_wide(lpFileName, FileEventType::Read);
+    let _ = record_event_wide(lpFileName, FileEventType::Read)
+        .map_err(|x| eprintln!("record failed in findfirstfilew:{}", x));
     ret
 }
 unsafe extern "system" fn TrapFindFirstFileExA(
@@ -249,15 +248,15 @@ unsafe extern "system" fn TrapFindFirstFileExA(
     lpSearchFilter: LPVOID,
     dwAdditionalFlags: DWORD,
 ) -> HANDLE {
-    type ProcType = extern "system" fn (
+    type ProcType = extern "system" fn(
         lpFileName: LPCSTR,
         fInfoLevelId: FINDEX_INFO_LEVELS,
         lpFindFileData: LPVOID,
         fSearchOp: FINDEX_SEARCH_OPS,
         lpSearchFilter: LPVOID,
         dwAdditionalFlags: DWORD,
-    ) -> HANDLE ;
-    let realapi : ProcType = std::mem::transmute(REAL_FINDFIRSTFILEEXA);
+    ) -> HANDLE;
+    let realapi: ProcType = std::mem::transmute(REAL_FINDFIRSTFILEEXA);
 
     let ret = realapi(
         lpFileName,
@@ -268,7 +267,8 @@ unsafe extern "system" fn TrapFindFirstFileExA(
         dwAdditionalFlags,
     );
     if ret != INVALID_HANDLE_VALUE {
-        let _ = record_event(lpFileName, FileEventType::Read);
+        let _ = record_event(lpFileName, FileEventType::Read)
+            .map_err(|x| eprintln!("record failed in findfirstfileexa:{}", x));
     }
     ret
 }
@@ -280,15 +280,15 @@ unsafe extern "system" fn TrapFindFirstFileExW(
     lpSearchFilter: LPVOID,
     dwAdditionalFlags: DWORD,
 ) -> HANDLE {
-    type ProcType =unsafe extern "system" fn (
+    type ProcType = unsafe extern "system" fn(
         lpFileName: LPCWSTR,
         fInfoLevelId: FINDEX_INFO_LEVELS,
         lpFindFileData: LPVOID,
         fSearchOp: FINDEX_SEARCH_OPS,
         lpSearchFilter: LPVOID,
         dwAdditionalFlags: DWORD,
-    ) -> HANDLE ;
-    let realapi : ProcType = std::mem::transmute(REAL_FINDFIRSTFILEEXW);
+    ) -> HANDLE;
+    let realapi: ProcType = std::mem::transmute(REAL_FINDFIRSTFILEEXW);
 
     let ret = realapi(
         lpFileName,
@@ -299,24 +299,27 @@ unsafe extern "system" fn TrapFindFirstFileExW(
         dwAdditionalFlags,
     );
     if ret != INVALID_HANDLE_VALUE {
-        let _ = record_event_wide(lpFileName, FileEventType::Read);
+        let _ = record_event_wide(lpFileName, FileEventType::Read)
+            .map_err(|x| eprintln!("record failed in findfirstfileexw:{}", x));
     }
     ret
 }
 unsafe extern "system" fn TrapGetFileAttributesA(lpFileName: LPCSTR) -> DWORD {
-    type ProcType = extern "system" fn (lpFileName: LPCSTR) -> DWORD ;
-    let realapi : ProcType = std::mem::transmute(REAL_GETFILEATTRIBUTESA);
+    type ProcType = extern "system" fn(lpFileName: LPCSTR) -> DWORD;
+    let realapi: ProcType = std::mem::transmute(REAL_GETFILEATTRIBUTESA);
 
     let ret = realapi(lpFileName);
-    let _ = record_event(lpFileName, FileEventType::Read);
+    let _ = record_event(lpFileName, FileEventType::Read)
+        .map_err(|x| eprintln!("record failed in GetFileAttributesA:{}", x));
     ret
 }
 unsafe extern "system" fn TrapGetFileAttributesW(lpFileName: LPCWSTR) -> DWORD {
-    type ProcType =unsafe extern "system" fn (lpFileName: LPCWSTR) -> DWORD ;
-    let realapi : ProcType = std::mem::transmute(REAL_GETFILEATTRIBUTESW);
+    type ProcType = unsafe extern "system" fn(lpFileName: LPCWSTR) -> DWORD;
+    let realapi: ProcType = std::mem::transmute(REAL_GETFILEATTRIBUTESW);
 
     let ret = realapi(lpFileName);
-    let _ = record_event_wide(lpFileName, FileEventType::Read);
+    let _ = record_event_wide(lpFileName, FileEventType::Read)
+        .map_err(|x| eprintln!("record failed in GetFileAttributesW:{}", x));
     ret
 }
 unsafe extern "system" fn TrapGetFileAttributesExA(
@@ -324,16 +327,17 @@ unsafe extern "system" fn TrapGetFileAttributesExA(
     fInfoLevelId: GET_FILEEX_INFO_LEVELS,
     lpFileInformation: LPVOID,
 ) -> BOOL {
-    type ProcType =unsafe extern "system" fn (
+    type ProcType = unsafe extern "system" fn(
         lpFileName: LPCSTR,
         fInfoLevelId: GET_FILEEX_INFO_LEVELS,
         lpFileInformation: LPVOID,
-    ) -> BOOL ;
-    let realapi : ProcType = std::mem::transmute(REAL_GETFILEATTRIBUTESEXA);
+    ) -> BOOL;
+    let realapi: ProcType = std::mem::transmute(REAL_GETFILEATTRIBUTESEXA);
 
     let ret = realapi(lpFileName, fInfoLevelId, lpFileInformation);
     if ret != FALSE {
-        let _ = record_event(lpFileName, FileEventType::Write);
+        let _ = record_event(lpFileName, FileEventType::Write)
+            .map_err(|x| eprintln!("record failed in GetFileAttributesExA:{}", x));
     }
     ret
 }
@@ -342,16 +346,17 @@ unsafe extern "system" fn TrapGetFileAttributesExW(
     fInfoLevelId: GET_FILEEX_INFO_LEVELS,
     lpFileInformation: LPVOID,
 ) -> BOOL {
-    type ProcType =unsafe extern "system" fn (
+    type ProcType = unsafe extern "system" fn(
         lpFileName: LPCWSTR,
         fInfoLevelId: GET_FILEEX_INFO_LEVELS,
         lpFileInformation: LPVOID,
-    ) -> BOOL ;
-    let realapi : ProcType = std::mem::transmute(REAL_GETFILEATTRIBUTESEXW);
+    ) -> BOOL;
+    let realapi: ProcType = std::mem::transmute(REAL_GETFILEATTRIBUTESEXW);
 
     let ret = realapi(lpFileName, fInfoLevelId, lpFileInformation);
     if ret != FALSE {
-        let _ = record_event_wide(lpFileName, FileEventType::Write);
+        let _ = record_event_wide(lpFileName, FileEventType::Write)
+            .map_err(|x| eprintln!("record failed in GetFileAttributesExW:{}", x));
     }
     ret
 }
@@ -359,15 +364,13 @@ unsafe extern "system" fn TrapSetFileAttributesA(
     lpFileName: LPCSTR,
     dwFileAttributes: DWORD,
 ) -> BOOL {
-    type ProcType =unsafe extern "system" fn (
-        lpFileName: LPCSTR,
-        dwFileAttributes: DWORD,
-    ) -> BOOL ;
-    let realapi : ProcType = std::mem::transmute(REAL_SETFILEATTRIBUTESA);
+    type ProcType = unsafe extern "system" fn(lpFileName: LPCSTR, dwFileAttributes: DWORD) -> BOOL;
+    let realapi: ProcType = std::mem::transmute(REAL_SETFILEATTRIBUTESA);
 
     let ret = realapi(lpFileName, dwFileAttributes);
     if ret != FALSE {
-        let _ = record_event(lpFileName, FileEventType::Write);
+        let _ = record_event(lpFileName, FileEventType::Write)
+            .map_err(|x| eprintln!("record failed in SetFileAttributesA:{}", x));
     }
     ret
 }
@@ -376,15 +379,13 @@ unsafe extern "system" fn TrapSetFileAttributesW(
     lpFileName: LPCWSTR,
     dwFileAttributes: DWORD,
 ) -> BOOL {
-    type ProcType =unsafe extern "system" fn (
-        lpFileName: LPCWSTR,
-        dwFileAttributes: DWORD,
-    ) -> BOOL ;
-    let realapi : ProcType = std::mem::transmute(REAL_SETFILEATTRIBUTESW);
+    type ProcType = unsafe extern "system" fn(lpFileName: LPCWSTR, dwFileAttributes: DWORD) -> BOOL;
+    let realapi: ProcType = std::mem::transmute(REAL_SETFILEATTRIBUTESW);
 
     let ret = realapi(lpFileName, dwFileAttributes);
     if ret != FALSE {
-        let _ = record_event_wide(lpFileName, FileEventType::Write);
+        let _ = record_event_wide(lpFileName, FileEventType::Write)
+            .map_err(|x| eprintln!("record failed in SetFileAttributesW:{}", x));
     }
     ret
 }
@@ -398,7 +399,7 @@ pub unsafe extern "system" fn TrapCreateFileA(
     dwFlagsAndAttributes: DWORD,
     hTemplateFile: HANDLE,
 ) -> HANDLE {
-    type ProcType = unsafe extern "system" fn (
+    type ProcType = unsafe extern "system" fn(
         LPCSTR,
         DWORD,
         DWORD,
@@ -407,8 +408,8 @@ pub unsafe extern "system" fn TrapCreateFileA(
         DWORD,
         HANDLE,
     ) -> HANDLE;
-    let realapi : ProcType = std::mem::transmute(REAL_CREATEFILEA);
-    let handle =  realapi(
+    let realapi: ProcType = std::mem::transmute(REAL_CREATEFILEA);
+    let handle = realapi(
         lpFileName,
         dwDesiredAccess,
         dwShareMode,
@@ -418,20 +419,26 @@ pub unsafe extern "system" fn TrapCreateFileA(
         hTemplateFile,
     );
 
-    if handle != INVALID_HANDLE_VALUE && winapi::um::fileapi::GetFileType(handle as _) == winapi::um::winbase::FILE_TYPE_DISK  {
+    if handle != INVALID_HANDLE_VALUE
+        && winapi::um::fileapi::GetFileType(handle as _) == winapi::um::winbase::FILE_TYPE_DISK
+    {
         if dwDesiredAccess & TUP_UNLINK_FLAGS != 0 || dwShareMode & TUP_UNLINK_FLAGS != 0 {
             let _ = record_event(lpFileName, FileEventType::Unlink).map_err(|x| {
-                eprintln!("{}", x);
+                eprintln!("record failed in createfilea unlink {}", x);
                 0
             });
         } else if dwDesiredAccess & TUP_CREATE_WRITE_FLAGS != 0 {
             let _ = record_event(lpFileName, FileEventType::Write).map_err(|x| {
-                eprintln!("{}", x);
+                eprintln!("record failed in cretatefilea write:{}", x);
                 0
             });
         } else {
             let _ = record_event(lpFileName, FileEventType::Read).map_err(|x| {
-                eprintln!("{}", x);
+                eprintln!(
+                    "record failed in cretatefilea read:{}\n{:?}",
+                    x,
+                    CStr::from_ptr(lpFileName)
+                );
                 0
             });
         }
@@ -447,7 +454,7 @@ pub unsafe extern "system" fn TrapCreateFileW(
     dwFlagsAndAttributes: DWORD,
     hTemplateFile: HANDLE,
 ) -> HANDLE {
-    type ProcType = unsafe extern "system" fn (
+    type ProcType = unsafe extern "system" fn(
         lpFileName: LPCWSTR,
         dwDesiredAccess: DWORD,
         dwShareMode: DWORD,
@@ -455,36 +462,34 @@ pub unsafe extern "system" fn TrapCreateFileW(
         dwCreationDisposition: DWORD,
         dwFlagsAndAttributes: DWORD,
         hTemplateFile: HANDLE,
-    ) -> HANDLE ;
-    let mut handle = std::ptr::null_mut();
-    if  lpFileName != std::ptr::null_mut() {
-        let realapi : ProcType = std::mem::transmute(REAL_CREATEFILEW);
-        handle =  realapi(
-            lpFileName,
-            dwDesiredAccess,
-            dwShareMode,
-            lpSecurityAttributes,
-            dwCreationDisposition,
-            dwFlagsAndAttributes,
-            hTemplateFile,
-        );
-    }
+    ) -> HANDLE;
+    let realapi: ProcType = std::mem::transmute(REAL_CREATEFILEW);
+    let handle = realapi(
+        lpFileName,
+        dwDesiredAccess,
+        dwShareMode,
+        lpSecurityAttributes,
+        dwCreationDisposition,
+        dwFlagsAndAttributes,
+        hTemplateFile,
+    );
 
     if handle != INVALID_HANDLE_VALUE
-        && winapi::um::fileapi::GetFileType(handle as _) == winapi::um::winbase::FILE_TYPE_DISK {
+        && winapi::um::fileapi::GetFileType(handle as _) == winapi::um::winbase::FILE_TYPE_DISK
+    {
         if dwDesiredAccess & TUP_UNLINK_FLAGS != 0 || dwShareMode & TUP_UNLINK_FLAGS != 0 {
             let _ = record_event_wide(lpFileName, FileEventType::Unlink).map_err(|x| {
-                eprintln!("{}", x);
+                eprintln!("createfilew: {}", x);
                 0
             });
         } else if dwDesiredAccess & TUP_CREATE_WRITE_FLAGS != 0 {
             let _ = record_event_wide(lpFileName, FileEventType::Write).map_err(|x| {
-                eprintln!("{}", x);
+                eprintln!("createfilew:{}", x);
                 0
             });
         } else {
             let _ = record_event_wide(lpFileName, FileEventType::Read).map_err(|x| {
-                eprintln!("{}", x);
+                eprintln!("createfilew:{}", x);
                 0
             });
         }
@@ -497,20 +502,22 @@ pub unsafe extern "system" fn TrapCopyFile2(
     pwszNewFileName: PCWSTR,
     pExtendedParameters: *mut COPYFILE2_EXTENDED_PARAMETERS,
 ) -> HRESULT {
-    type ProcType = unsafe extern "system" fn (
+    type ProcType = unsafe extern "system" fn(
         pwszExistingFileName: PCWSTR,
         pwszNewFileName: PCWSTR,
         pExtendedParameters: *mut COPYFILE2_EXTENDED_PARAMETERS,
-    ) -> HRESULT ;
-    let realapi : ProcType = std::mem::transmute(REAL_COPYFILE2);
+    ) -> HRESULT;
+    let realapi: ProcType = std::mem::transmute(REAL_COPYFILE2);
     let res = realapi(
         pwszExistingFileName,
         pwszNewFileName,
         pExtendedParameters as _,
     );
     if res != 0 {
-        let _ = record_event_wide(pwszNewFileName, FileEventType::Write);
-        let _ = record_event_wide(pwszExistingFileName, FileEventType::Read);
+        let _ = record_event_wide(pwszNewFileName, FileEventType::Write)
+            .map_err(|x| eprintln!("record failed in CopyFile2:{}", x));
+        let _ = record_event_wide(pwszExistingFileName, FileEventType::Read)
+            .map_err(|x| eprintln!("record failed in CopyFile2:{}", x));
     }
     res
 }
@@ -519,17 +526,19 @@ pub unsafe extern "system" fn TrapCopyFileA(
     lpNewFileName: LPCSTR,
     bFailIfExists: BOOL,
 ) -> BOOL {
-    type ProcType = unsafe extern "system" fn (
+    type ProcType = unsafe extern "system" fn(
         lpExistingFileName: LPCSTR,
         lpNewFileName: LPCSTR,
         bFailIfExists: BOOL,
-    ) -> BOOL ;
-    let realapi : ProcType = std::mem::transmute(REAL_COPYFILEA);
+    ) -> BOOL;
+    let realapi: ProcType = std::mem::transmute(REAL_COPYFILEA);
 
     let res = realapi(lpExistingFileName, lpNewFileName, bFailIfExists);
     if res != 0 {
-        let _ = record_event(lpNewFileName, FileEventType::Write);
-        let _ = record_event(lpExistingFileName, FileEventType::Read);
+        let _ = record_event(lpNewFileName, FileEventType::Write)
+            .map_err(|x| eprintln!("record failed in CopyFileA:{}", x));
+        let _ = record_event(lpExistingFileName, FileEventType::Read)
+            .map_err(|x| eprintln!("record failed in CopyFileA:{}", x));
     }
     res
 }
@@ -541,15 +550,15 @@ pub unsafe extern "system" fn TrapCopyFileExA(
     pbCancel: LPBOOL,
     dwCopyFlags: DWORD,
 ) -> BOOL {
-    type ProcType = unsafe extern "system" fn (
+    type ProcType = unsafe extern "system" fn(
         lpExistingFileName: LPCSTR,
         lpNewFileName: LPCSTR,
         lpProgressRoutine: LPPROGRESS_ROUTINE,
         lpData: LPVOID,
         pbCancel: LPBOOL,
         dwCopyFlags: DWORD,
-    ) -> BOOL ;
-    let realapi : ProcType = std::mem::transmute(REAL_COPYFILEEXA);
+    ) -> BOOL;
+    let realapi: ProcType = std::mem::transmute(REAL_COPYFILEEXA);
 
     let ret = realapi(
         lpExistingFileName,
@@ -560,8 +569,10 @@ pub unsafe extern "system" fn TrapCopyFileExA(
         dwCopyFlags,
     );
     if ret != FALSE {
-        let _ = record_event(lpExistingFileName, FileEventType::Read);
-        let _ = record_event(lpNewFileName, FileEventType::Write);
+        let _ = record_event(lpExistingFileName, FileEventType::Read)
+            .map_err(|x| eprintln!("record failed in CopyFileExA:{}", x));
+        let _ = record_event(lpNewFileName, FileEventType::Write)
+            .map_err(|x| eprintln!("record failed in CopyFileExA:{}", x));
     }
     ret
 }
@@ -573,15 +584,15 @@ pub unsafe extern "system" fn TrapCopyFileExW(
     pbCancel: LPBOOL,
     dwCopyFlags: DWORD,
 ) -> BOOL {
-    type ProcType = unsafe extern "system" fn (
+    type ProcType = unsafe extern "system" fn(
         lpExistingFileName: LPCWSTR,
         lpNewFileName: LPCWSTR,
         lpProgressRoutine: LPPROGRESS_ROUTINE,
         lpData: LPVOID,
         pbCancel: LPBOOL,
         dwCopyFlags: DWORD,
-    ) -> BOOL ;
-    let realapi : ProcType = std::mem::transmute(REAL_COPYFILEEXW);
+    ) -> BOOL;
+    let realapi: ProcType = std::mem::transmute(REAL_COPYFILEEXW);
 
     let ret = realapi(
         lpExistingFileName,
@@ -592,8 +603,10 @@ pub unsafe extern "system" fn TrapCopyFileExW(
         dwCopyFlags,
     );
     if ret != FALSE {
-        let _ = record_event_wide(lpExistingFileName, FileEventType::Read);
-        let _ = record_event_wide(lpNewFileName, FileEventType::Write);
+        let _ = record_event_wide(lpExistingFileName, FileEventType::Read)
+            .map_err(|x| eprintln!("record failed in CopyFileExW:{}", x));
+        let _ = record_event_wide(lpNewFileName, FileEventType::Write)
+            .map_err(|x| eprintln!("record failed in CopyFileExW:{}", x));
     }
     ret
 }
@@ -606,7 +619,7 @@ pub unsafe extern "system" fn TrapCopyFileTransactedA(
     dwCopyFlags: DWORD,
     hTransaction: HANDLE,
 ) -> BOOL {
-    type ProcType = unsafe extern "system" fn (
+    type ProcType = unsafe extern "system" fn(
         lpExistingFileName: LPCWSTR,
         lpNewFileName: LPCWSTR,
         lpProgressRoutine: LPPROGRESS_ROUTINE,
@@ -614,8 +627,8 @@ pub unsafe extern "system" fn TrapCopyFileTransactedA(
         pbCancel: LPBOOL,
         dwCopyFlags: DWORD,
         hTransaction: HANDLE,
-    ) -> BOOL ;
-    let realapi : ProcType = std::mem::transmute(REAL_COPYFILETRANSACTEDA);
+    ) -> BOOL;
+    let realapi: ProcType = std::mem::transmute(REAL_COPYFILETRANSACTEDA);
 
     let ret = realapi(
         lpExistingFileName,
@@ -627,8 +640,10 @@ pub unsafe extern "system" fn TrapCopyFileTransactedA(
         hTransaction,
     );
     if ret != FALSE {
-        let _ = record_event_wide(lpExistingFileName, FileEventType::Read);
-        let _ = record_event_wide(lpNewFileName, FileEventType::Write);
+        let _ = record_event_wide(lpExistingFileName, FileEventType::Read)
+            .map_err(|x| eprintln!("record failed in CopyFileTransactedA:{}", x));
+        let _ = record_event_wide(lpNewFileName, FileEventType::Write)
+            .map_err(|x| eprintln!("record failed in CopyFileTransactedA:{}", x));
     }
     ret
 }
@@ -641,7 +656,7 @@ pub unsafe extern "system" fn TrapCopyFileTransactedW(
     dwCopyFlags: DWORD,
     hTransaction: HANDLE,
 ) -> BOOL {
-    type ProcType = unsafe extern "system" fn (
+    type ProcType = unsafe extern "system" fn(
         lpExistingFileName: LPCWSTR,
         lpNewFileName: LPCWSTR,
         lpProgressRoutine: LPPROGRESS_ROUTINE,
@@ -649,8 +664,8 @@ pub unsafe extern "system" fn TrapCopyFileTransactedW(
         pbCancel: LPBOOL,
         dwCopyFlags: DWORD,
         hTransaction: HANDLE,
-    ) -> BOOL ;
-    let realapi : ProcType = std::mem::transmute(REAL_COPYFILETRANSACTEDW);
+    ) -> BOOL;
+    let realapi: ProcType = std::mem::transmute(REAL_COPYFILETRANSACTEDW);
 
     let ret = realapi(
         lpExistingFileName,
@@ -662,8 +677,10 @@ pub unsafe extern "system" fn TrapCopyFileTransactedW(
         hTransaction,
     );
     if ret != FALSE {
-        let _ = record_event_wide(lpExistingFileName, FileEventType::Read);
-        let _ = record_event_wide(lpNewFileName, FileEventType::Write);
+        let _ = record_event_wide(lpExistingFileName, FileEventType::Read)
+            .map_err(|x| eprintln!("record failed in CopyFileTransactedW:{}", x));
+        let _ = record_event_wide(lpNewFileName, FileEventType::Write)
+            .map_err(|x| eprintln!("record failed in CopyFileTransactedW:{}", x));
     }
     ret
 }
@@ -672,17 +689,19 @@ pub unsafe extern "system" fn TrapCopyFileW(
     lpNewFileName: LPCWSTR,
     bFailIfExists: BOOL,
 ) -> BOOL {
-    type ProcType = unsafe extern "system" fn (
+    type ProcType = unsafe extern "system" fn(
         lpExistingFileName: LPCWSTR,
         lpNewFileName: LPCWSTR,
         bFailIfExists: BOOL,
-    ) -> BOOL ;
-    let realapi : ProcType = std::mem::transmute(REAL_COPYFILEW);
+    ) -> BOOL;
+    let realapi: ProcType = std::mem::transmute(REAL_COPYFILEW);
 
     let ret = realapi(lpExistingFileName, lpNewFileName, bFailIfExists);
     if ret != FALSE {
-        let _ = record_event_wide(lpExistingFileName, FileEventType::Read);
-        let _ = record_event_wide(lpNewFileName, FileEventType::Write);
+        let _ = record_event_wide(lpExistingFileName, FileEventType::Read)
+            .map_err(|x| eprintln!("record failed in CopyFileW:{}", x));
+        let _ = record_event_wide(lpNewFileName, FileEventType::Write)
+            .map_err(|x| eprintln!("record failed in CopyFileW:{}", x));
     }
     ret
 }
@@ -695,7 +714,7 @@ pub unsafe extern "system" fn TrapReplaceFileA(
     lpExclude: LPVOID,
     lpReserved: LPVOID,
 ) {
-    type ProcType = unsafe extern "system" fn (
+    type ProcType = unsafe extern "system" fn(
         lpReplacedFileName: LPCSTR,
         lpReplacementFileName: LPCSTR,
         lpBackupFileName: LPCSTR,
@@ -703,17 +722,21 @@ pub unsafe extern "system" fn TrapReplaceFileA(
         lpExclude: LPVOID,
         lpReserved: LPVOID,
     );
-    let realapi : ProcType = std::mem::transmute(REAL_REPLACEFILEA);
+    let realapi: ProcType = std::mem::transmute(REAL_REPLACEFILEA);
 
-    realapi( lpReplacedFileName,
-             lpReplacementFileName,
-             lpBackupFileName,
-             dwReplaceFlags,
-             lpExclude as _,
-             lpReserved as _);
+    realapi(
+        lpReplacedFileName,
+        lpReplacementFileName,
+        lpBackupFileName,
+        dwReplaceFlags,
+        lpExclude as _,
+        lpReserved as _,
+    );
     {
-        let _ = record_event(lpReplacedFileName, FileEventType::Unlink);
-        let _ = record_event(lpReplacementFileName, FileEventType::Write);
+        let _ = record_event(lpReplacedFileName, FileEventType::Unlink)
+            .map_err(|x| eprintln!("record failed in ReplaceFileA:{}", x));
+        let _ = record_event(lpReplacementFileName, FileEventType::Write)
+            .map_err(|x| eprintln!("record failed in ReplaceFileA:{}", x));
     }
 }
 pub unsafe extern "system" fn TrapReplaceFileW(
@@ -724,41 +747,61 @@ pub unsafe extern "system" fn TrapReplaceFileW(
     lpExclude: LPVOID,
     lpReserved: LPVOID,
 ) {
-    type ProcType = unsafe extern "system" fn (
+    type ProcType = unsafe extern "system" fn(
         lpReplacedFileName: LPCWSTR,
         lpReplacementFileName: LPCWSTR,
         lpBackupFileName: LPCWSTR,
         dwReplaceFlags: DWORD,
         lpExclude: LPVOID,
         lpReserved: LPVOID,
-    ) ;
-    let realapi : ProcType = std::mem::transmute(REAL_REPLACEFILEW);
-    realapi(lpReplacedFileName, lpReplacementFileName, lpBackupFileName, dwReplaceFlags, lpExclude, lpReserved);
+    );
+    let realapi: ProcType = std::mem::transmute(REAL_REPLACEFILEW);
+    realapi(
+        lpReplacedFileName,
+        lpReplacementFileName,
+        lpBackupFileName,
+        dwReplaceFlags,
+        lpExclude,
+        lpReserved,
+    );
     {
-        let _ = record_event_wide(lpReplacedFileName, FileEventType::Unlink);
-        let _ = record_event_wide(lpReplacementFileName, FileEventType::Write);
+        let _ = record_event_wide(lpReplacedFileName, FileEventType::Unlink)
+            .map_err(|x| eprintln!("record failed in ReplaceFileW:{}", x));
+        let _ = record_event_wide(lpReplacementFileName, FileEventType::Write)
+            .map_err(|x| eprintln!("record failed in ReplaceFileW:{}", x));
     }
 }
 
-pub unsafe extern "system" fn TrapMoveFileA(lpExistingFileName: LPCSTR, lpNewFileName: LPCSTR) -> BOOL {
-    type ProcType = unsafe extern "system" fn(lpExistingFileName: LPCSTR, lpNewFileName: LPCSTR) -> BOOL ;
-    let realapi : ProcType = std::mem::transmute(REAL_MOVEFILEA);
-    let ret : BOOL = realapi(lpExistingFileName, lpNewFileName, );
-    if ret != FALSE
-    {
-        let _ = record_event(lpExistingFileName, FileEventType::Unlink);
-        let _ = record_event(lpNewFileName, FileEventType::Write);
+pub unsafe extern "system" fn TrapMoveFileA(
+    lpExistingFileName: LPCSTR,
+    lpNewFileName: LPCSTR,
+) -> BOOL {
+    type ProcType =
+        unsafe extern "system" fn(lpExistingFileName: LPCSTR, lpNewFileName: LPCSTR) -> BOOL;
+    let realapi: ProcType = std::mem::transmute(REAL_MOVEFILEA);
+    let ret: BOOL = realapi(lpExistingFileName, lpNewFileName);
+    if ret != FALSE {
+        let _ = record_event(lpExistingFileName, FileEventType::Unlink)
+            .map_err(|x| eprintln!("record failed in MoveFileA:{}", x));
+        let _ = record_event(lpNewFileName, FileEventType::Write)
+            .map_err(|x| eprintln!("record failed in MoveFileA:{}", x));
     }
     ret
 }
-pub unsafe extern "system" fn TrapMoveFileW(lpExistingFileName: LPCWSTR, lpNewFileName: LPCWSTR) -> BOOL {
-    type ProcType = unsafe extern "system" fn(lpExistingFileName: LPCWSTR, lpNewFileName: LPCWSTR) -> BOOL ;
-    let realapi : ProcType = std::mem::transmute(REAL_MOVEFILEW);
+pub unsafe extern "system" fn TrapMoveFileW(
+    lpExistingFileName: LPCWSTR,
+    lpNewFileName: LPCWSTR,
+) -> BOOL {
+    type ProcType =
+        unsafe extern "system" fn(lpExistingFileName: LPCWSTR, lpNewFileName: LPCWSTR) -> BOOL;
+    let realapi: ProcType = std::mem::transmute(REAL_MOVEFILEW);
 
     let ret = realapi(lpExistingFileName, lpNewFileName);
     if ret != FALSE {
-        let _ = record_event_wide(lpExistingFileName, FileEventType::Unlink);
-        let _ = record_event_wide(lpNewFileName, FileEventType::Write);
+        let _ = record_event_wide(lpExistingFileName, FileEventType::Unlink)
+            .map_err(|x| eprintln!("record failed in MoveFileW:{}", x));
+        let _ = record_event_wide(lpNewFileName, FileEventType::Write)
+            .map_err(|x| eprintln!("record failed in MoveFileW:{}", x));
     }
     ret
 }
@@ -772,12 +815,14 @@ pub unsafe extern "system" fn TrapMoveFileExA(
         lpNewFileName: LPCSTR,
         dwFlags: DWORD,
     ) -> BOOL;
-    let realapi : ProcType = std::mem::transmute(REAL_MOVEFILEEXA);
+    let realapi: ProcType = std::mem::transmute(REAL_MOVEFILEEXA);
 
     let ret = realapi(lpExistingFileName, lpNewFileName, dwFlags);
     if ret != FALSE {
-        let _ = record_event(lpExistingFileName, FileEventType::Unlink);
-        let _ = record_event(lpNewFileName, FileEventType::Write);
+        let _ = record_event(lpExistingFileName, FileEventType::Unlink)
+            .map_err(|x| eprintln!("record failed in MoveFileExA:{}", x));
+        let _ = record_event(lpNewFileName, FileEventType::Write)
+            .map_err(|x| eprintln!("record failed in MoveFileExA:{}", x));
     }
     ret
 }
@@ -786,17 +831,19 @@ pub unsafe extern "system" fn TrapMoveFileExW(
     lpNewFileName: LPCWSTR,
     dwFlags: DWORD,
 ) -> BOOL {
-    type ProcType = unsafe extern "system" fn (
+    type ProcType = unsafe extern "system" fn(
         lpExistingFileName: LPCWSTR,
         lpNewFileName: LPCWSTR,
         dwFlags: DWORD,
-    ) -> BOOL ;
-    let realapi : ProcType = std::mem::transmute(REAL_MOVEFILEEXW);
+    ) -> BOOL;
+    let realapi: ProcType = std::mem::transmute(REAL_MOVEFILEEXW);
 
     let ret = realapi(lpExistingFileName, lpNewFileName, dwFlags);
     if ret != FALSE {
-        let _ = record_event_wide(lpExistingFileName, FileEventType::Unlink);
-        let _ = record_event_wide(lpNewFileName, FileEventType::Write);
+        let _ = record_event_wide(lpExistingFileName, FileEventType::Unlink)
+            .map_err(|x| eprintln!("record failed in MoveFileExW:{}", x));
+        let _ = record_event_wide(lpNewFileName, FileEventType::Write)
+            .map_err(|x| eprintln!("record failed in MoveFileExW:{}", x));
     }
     ret
 }
@@ -806,29 +853,30 @@ pub unsafe extern "system" fn TrapOpenFile(
     lpReOpenBuff: LPOFSTRUCT,
     uStyle: UINT,
 ) {
-    type ProcType = unsafe extern "system" fn (
-        lpFileName: LPCSTR,
-        lpReOpenBuff: LPOFSTRUCT,
-        uStyle: UINT,
-    ) ;
-    let realapi : ProcType = std::mem::transmute(REAL_OPENFILE);
+    type ProcType =
+        unsafe extern "system" fn(lpFileName: LPCSTR, lpReOpenBuff: LPOFSTRUCT, uStyle: UINT);
+    let realapi: ProcType = std::mem::transmute(REAL_OPENFILE);
     realapi(lpFileName, lpReOpenBuff, uStyle);
 
     if uStyle & OF_DELETE != 0 {
-        let _ = record_event(lpFileName, FileEventType::Unlink);
+        let _ = record_event(lpFileName, FileEventType::Unlink)
+            .map_err(|x| eprintln!("record failed in OpenFile:{}", x));
     } else if uStyle
         & (OF_READWRITE | OF_WRITE | OF_SHARE_DENY_WRITE | OF_SHARE_EXCLUSIVE | OF_CREATE)
         != 0
     {
-        let _ = record_event(lpFileName, FileEventType::Write);
+        let _ = record_event(lpFileName, FileEventType::Write)
+            .map_err(|x| eprintln!("record failed in OpenFile:{}", x));
     } else {
-        let _ = record_event(lpFileName, FileEventType::Read);
+        let _ = record_event(lpFileName, FileEventType::Read)
+            .map_err(|x| eprintln!("record failed in OpenFile:{}", x));
     }
 }
 
 pub type EntryPointType = unsafe extern "system" fn();
 // unsafe extern "system" fn empty_entry_point() {}
 type BigPath = [WCHAR; 1024];
+type BigPathA = [CHAR; 1024];
 
 const SIZEOFBIGPATH: u32 = 1024;
 #[derive(Clone)]
@@ -855,12 +903,6 @@ impl Default for TrapInfo {
     }
 }
 static mut REALENTRYPOINT: FARPROC = std::ptr::null_mut();
-// pub struct Comm {
-//     csPipe: CRITICAL_SECTION, // Guards access to hPipe.
-//     hPipe: HANDLE,
-//     csChildPayLoad: CRITICAL_SECTION,
-//     // nPipeCnt: u32
-// }
 pub const TBLOG_PIPE_NAME: &'static str = "\\\\.\\pipe\\tracebuild\0";
 
 impl Payload {
@@ -947,13 +989,14 @@ pub unsafe extern "system" fn FindMsvcr() -> bool {
     );
     !S_HMSVCR.is_null()
 }
-
+static mut DLLPATHW: BigPath = [0; SIZEOFBIGPATH as _];
+static mut DLLPATHA: BigPathA = [0; SIZEOFBIGPATH as _];
 impl TrapInfo {
     pub fn new(hModule: HMODULE) -> Self {
-        // let mut dllPath: BigPath = [0; SIZEOFBIGPATH as _];
-        // unsafe {
-        //     GetModuleFileNameW(hModule, (&mut dllPath).as_mut_ptr(), SIZEOFBIGPATH);
-        // }
+        unsafe {
+            GetModuleFileNameW(hModule, (&mut DLLPATHW).as_mut_ptr(), SIZEOFBIGPATH);
+            GetModuleFileNameA(hModule, (&mut DLLPATHA).as_mut_ptr(), SIZEOFBIGPATH);
+        }
         TrapInfo {
             hInst: hModule,
             // zDllPath: dllPath,
@@ -968,84 +1011,84 @@ impl TrapInfo {
     pub unsafe fn attach(&self) {
         use detours::DetourAttach;
         detours::DetourUpdateThread(GetCurrentThread() as _);
-        let kstr  = wstr!("kernel32\0");
-        let  hkernel32 = GetModuleHandleW( kstr.as_ptr());
-        let realapi = GetProcAddress(hkernel32, "DeleteFileA\0".as_ptr() as _, );
+        let kstr = wstr!("kernel32\0");
+        let hkernel32 = GetModuleHandleW(kstr.as_ptr());
+        let realapi = GetProcAddress(hkernel32, "DeleteFileA\0".as_ptr() as _);
         REAL_DELETEFILEA = realapi;
         DetourAttach(
             &REAL_DELETEFILEA as *const _ as _,
             (TrapDeleteFileA as *const ()) as _,
         );
-        let realapi = GetProcAddress(hkernel32, "DeleteFileW\0".as_ptr() as _, );
+        let realapi = GetProcAddress(hkernel32, "DeleteFileW\0".as_ptr() as _);
         REAL_DELETEFILEW = realapi;
         DetourAttach(
             &REAL_DELETEFILEW as *const _ as _,
             (TrapDeleteFileW as *const ()) as _,
         );
-        let realapi = GetProcAddress(hkernel32, "FindFirstFileA\0".as_ptr() as _, );
+        let realapi = GetProcAddress(hkernel32, "FindFirstFileA\0".as_ptr() as _);
         REAL_FINDFIRSTFILEA = std::mem::transmute(realapi);
         DetourAttach(
             &REAL_FINDFIRSTFILEA as *const _ as _,
             (TrapFindFirstFileA as *const ()) as _,
         );
 
-        let realapi = GetProcAddress(hkernel32, "FindFirstFileW\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "FindFirstFileW\0".as_ptr() as _);
         REAL_FINDFIRSTFILEW = std::mem::transmute(realapi);
         DetourAttach(
             &REAL_FINDFIRSTFILEW as *const _ as _,
             (TrapFindFirstFileW as *const ()) as _,
         );
 
-        let realapi = GetProcAddress(hkernel32, "FindFirstFileExA\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "FindFirstFileExA\0".as_ptr() as _);
         REAL_FINDFIRSTFILEEXA = std::mem::transmute(realapi);
         DetourAttach(
             &REAL_FINDFIRSTFILEEXA as *const _ as _,
             (TrapFindFirstFileExA as *const ()) as _,
         );
 
-        let realapi = GetProcAddress(hkernel32, "FindFirstFileExW\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "FindFirstFileExW\0".as_ptr() as _);
         REAL_FINDFIRSTFILEEXW = std::mem::transmute(realapi);
         DetourAttach(
             &REAL_FINDFIRSTFILEEXW as *const _ as _,
             (TrapFindFirstFileExW as *const ()) as _,
         );
 
-        let realapi = GetProcAddress(hkernel32, "GetFileAttributesA\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "GetFileAttributesA\0".as_ptr() as _);
         REAL_GETFILEATTRIBUTESA = std::mem::transmute(realapi);
         DetourAttach(
             &REAL_GETFILEATTRIBUTESA as *const _ as _,
             (TrapGetFileAttributesA as *const ()) as _,
         );
 
-        let realapi = GetProcAddress(hkernel32, "GetFileAttributesW\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "GetFileAttributesW\0".as_ptr() as _);
         REAL_GETFILEATTRIBUTESW = std::mem::transmute(realapi);
         DetourAttach(
             &REAL_GETFILEATTRIBUTESW as *const _ as _,
             (TrapGetFileAttributesW as *const ()) as _,
         );
 
-        let realapi = GetProcAddress(hkernel32, "GetFileAttributesExA\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "GetFileAttributesExA\0".as_ptr() as _);
         REAL_GETFILEATTRIBUTESEXA = std::mem::transmute(realapi);
         DetourAttach(
             &REAL_GETFILEATTRIBUTESEXA as *const _ as _,
             (TrapGetFileAttributesExA as *const ()) as _,
         );
 
-        let realapi = GetProcAddress(hkernel32, "GetFileAttributesExW\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "GetFileAttributesExW\0".as_ptr() as _);
         REAL_GETFILEATTRIBUTESEXW = std::mem::transmute(realapi);
         DetourAttach(
             &REAL_GETFILEATTRIBUTESEXW as *const _ as _,
             (TrapGetFileAttributesExW as *const ()) as _,
         );
 
-        let realapi = GetProcAddress(hkernel32, "SetFileAttributesA\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "SetFileAttributesA\0".as_ptr() as _);
         REAL_SETFILEATTRIBUTESA = std::mem::transmute(realapi);
         DetourAttach(
             &REAL_SETFILEATTRIBUTESA as *const _ as _,
             (TrapSetFileAttributesA as *const ()) as _,
         );
 
-        let realapi = GetProcAddress(hkernel32, "SetFileAttributesW\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "SetFileAttributesW\0".as_ptr() as _);
         REAL_SETFILEATTRIBUTESW = std::mem::transmute(realapi);
         DetourAttach(
             &REAL_SETFILEATTRIBUTESW as *const _ as _,
@@ -1066,115 +1109,129 @@ impl TrapInfo {
             (TrapCreateFileW as *const ()) as _,
         );
 
-        let realapi = GetProcAddress(hkernel32, "CopyFile2\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "CopyFile2\0".as_ptr() as _);
         REAL_COPYFILE2 = std::mem::transmute(realapi);
-        DetourAttach(&REAL_COPYFILE2 as *const _ as _,
-                      (TrapCopyFile2 as *const ()) as _);
+        DetourAttach(
+            &REAL_COPYFILE2 as *const _ as _,
+            (TrapCopyFile2 as *const ()) as _,
+        );
 
         let realapi = GetProcAddress(hkernel32, "CopyFileA\0".as_ptr() as _);
         REAL_COPYFILEA = std::mem::transmute(realapi);
-        DetourAttach(&REAL_COPYFILEA as *const _ as _,
-                     (TrapCopyFileA as *const ()) as _);
+        DetourAttach(
+            &REAL_COPYFILEA as *const _ as _,
+            (TrapCopyFileA as *const ()) as _,
+        );
 
-        let realapi = GetProcAddress(hkernel32, "CopyFileW\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "CopyFileW\0".as_ptr() as _);
         REAL_COPYFILEW = std::mem::transmute(realapi);
-        DetourAttach(&REAL_COPYFILEW as *const _ as _,
-                      (TrapCopyFileW as *const ()) as _);
+        DetourAttach(
+            &REAL_COPYFILEW as *const _ as _,
+            (TrapCopyFileW as *const ()) as _,
+        );
 
-        let realapi = GetProcAddress(hkernel32, "CopyFileExA\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "CopyFileExA\0".as_ptr() as _);
         REAL_COPYFILEEXA = std::mem::transmute(realapi);
         DetourAttach(
             &REAL_COPYFILEEXA as *const _ as _,
             (TrapCopyFileExA as *const ()) as _,
         );
 
-        let realapi = GetProcAddress(hkernel32, "CopyFileExW\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "CopyFileExW\0".as_ptr() as _);
         REAL_COPYFILEEXW = std::mem::transmute(realapi);
         DetourAttach(
             &REAL_COPYFILEEXW as *const _ as _,
             (TrapCopyFileExW as *const ()) as _,
         );
 
-        let realapi = GetProcAddress(hkernel32, "CopyFileTransactedA\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "CopyFileTransactedA\0".as_ptr() as _);
         REAL_COPYFILETRANSACTEDA = std::mem::transmute(realapi);
         DetourAttach(
             &REAL_COPYFILETRANSACTEDA as *const _ as _,
             (TrapCopyFileTransactedA as *const ()) as _,
         );
 
-        let realapi = GetProcAddress(hkernel32, "CopyFileTransactedW\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "CopyFileTransactedW\0".as_ptr() as _);
         REAL_COPYFILETRANSACTEDW = std::mem::transmute(realapi);
         DetourAttach(
             &REAL_COPYFILETRANSACTEDW as *const _ as _,
             (TrapCopyFileTransactedW as *const ()) as _,
         );
 
-        let realapi = GetProcAddress(hkernel32, "ReplaceFileA\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "ReplaceFileA\0".as_ptr() as _);
         REAL_REPLACEFILEA = std::mem::transmute(realapi);
         DetourAttach(
             &REAL_REPLACEFILEA as *const _ as _,
             (TrapReplaceFileA as *const ()) as _,
         );
 
-        let realapi = GetProcAddress(hkernel32, "ReplaceFileW\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "ReplaceFileW\0".as_ptr() as _);
         REAL_REPLACEFILEW = std::mem::transmute(realapi);
         DetourAttach(
             &REAL_REPLACEFILEW as *const _ as _,
             (TrapReplaceFileW as *const ()) as _,
         );
 
-        let realapi = GetProcAddress(hkernel32, "MoveFileA\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "MoveFileA\0".as_ptr() as _);
         REAL_MOVEFILEA = std::mem::transmute(realapi);
-        DetourAttach(&REAL_MOVEFILEA as *const _ as _, (TrapMoveFileA as *const ()) as _);
+        DetourAttach(
+            &REAL_MOVEFILEA as *const _ as _,
+            (TrapMoveFileA as *const ()) as _,
+        );
 
-        let realapi = GetProcAddress(hkernel32, "MoveFileW\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "MoveFileW\0".as_ptr() as _);
         REAL_MOVEFILEW = std::mem::transmute(realapi);
-        DetourAttach(&REAL_MOVEFILEW as *const _ as _, (TrapMoveFileW as *const ()) as _);
+        DetourAttach(
+            &REAL_MOVEFILEW as *const _ as _,
+            (TrapMoveFileW as *const ()) as _,
+        );
 
-        let realapi = GetProcAddress(hkernel32, "MoveFileExA\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "MoveFileExA\0".as_ptr() as _);
         REAL_MOVEFILEEXA = std::mem::transmute(realapi);
         DetourAttach(
             &REAL_MOVEFILEEXA as *const _ as _,
             (TrapMoveFileExA as *const ()) as _,
         );
 
-        let realapi = GetProcAddress(hkernel32, "MoveFileExW\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "MoveFileExW\0".as_ptr() as _);
         REAL_MOVEFILEEXW = std::mem::transmute(realapi);
         DetourAttach(
             &REAL_MOVEFILEEXW as *const _ as _,
             (TrapMoveFileExW as *const ()) as _,
         );
 
-        let realapi = GetProcAddress(hkernel32, "OpenFile\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "OpenFile\0".as_ptr() as _);
         REAL_OPENFILE = std::mem::transmute(realapi);
-        DetourAttach(&REAL_OPENFILE as *const _ as _, (TrapOpenFile as *const ()) as _);
+        DetourAttach(
+            &REAL_OPENFILE as *const _ as _,
+            (TrapOpenFile as *const ()) as _,
+        );
 
-        let realapi = GetProcAddress(hkernel32, "CreateProcessA\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "CreateProcessA\0".as_ptr() as _);
         REAL_CREATEPROCESSA = std::mem::transmute(realapi);
         DetourAttach(
             &REAL_CREATEPROCESSA as *const _ as _,
             (TrapCreateProcessA as *const ()) as _,
         );
 
-        let realapi = GetProcAddress(hkernel32, "CreateProcessW\0".as_ptr() as _,);
+        let realapi = GetProcAddress(hkernel32, "CreateProcessW\0".as_ptr() as _);
         REAL_CREATEPROCESSW = std::mem::transmute(realapi);
         DetourAttach(
             &REAL_CREATEPROCESSW as *const _ as _,
             (TrapCreateProcessW as *const ()) as _,
         );
-        let ep =
-            detours::DetourGetEntryPoint(std::ptr::null_mut() as _)  ;
+        let ep = detours::DetourGetEntryPoint(std::ptr::null_mut() as _);
         REALENTRYPOINT = ep as _;
-        DetourAttach(&REALENTRYPOINT as *const _  as _,
-                     (TrapEntryPoint as *const ()) as _);
-
-
+        DetourAttach(
+            &REALENTRYPOINT as *const _ as _,
+            (TrapEntryPoint as *const ()) as _,
+        );
     }
 
     pub unsafe fn detach(&self) {
         use detours::DetourDetach;
         // let ptrap = TrapEntryPoint as *const ();
-       DetourDetach(
+        DetourDetach(
             &REAL_DELETEFILEA as *const _ as _,
             (TrapDeleteFileA as *const ()) as _,
         );
@@ -1242,14 +1299,20 @@ impl TrapInfo {
             (TrapCreateFileW as *const ()) as _,
         );
 
-        DetourDetach(&REAL_COPYFILE2 as *const _ as _,
-                      (TrapCopyFile2 as *const ()) as _);
+        DetourDetach(
+            &REAL_COPYFILE2 as *const _ as _,
+            (TrapCopyFile2 as *const ()) as _,
+        );
 
-        DetourDetach(&REAL_COPYFILEA as *const _ as _,
-                     (TrapCopyFileA as *const ()) as _);
+        DetourDetach(
+            &REAL_COPYFILEA as *const _ as _,
+            (TrapCopyFileA as *const ()) as _,
+        );
 
-        DetourDetach(&REAL_COPYFILEW as *const _ as _,
-                      (TrapCopyFileW as *const ()) as _);
+        DetourDetach(
+            &REAL_COPYFILEW as *const _ as _,
+            (TrapCopyFileW as *const ()) as _,
+        );
 
         DetourDetach(
             &REAL_COPYFILEEXA as *const _ as _,
@@ -1281,9 +1344,15 @@ impl TrapInfo {
             (TrapReplaceFileW as *const ()) as _,
         );
 
-        DetourDetach(&REAL_MOVEFILEA as *const _ as _, (TrapMoveFileA as *const ()) as _);
+        DetourDetach(
+            &REAL_MOVEFILEA as *const _ as _,
+            (TrapMoveFileA as *const ()) as _,
+        );
 
-        DetourDetach(&REAL_MOVEFILEW as *const _ as _, (TrapMoveFileW as *const ()) as _);
+        DetourDetach(
+            &REAL_MOVEFILEW as *const _ as _,
+            (TrapMoveFileW as *const ()) as _,
+        );
 
         DetourDetach(
             &REAL_MOVEFILEEXA as *const _ as _,
@@ -1295,7 +1364,10 @@ impl TrapInfo {
             (TrapMoveFileExW as *const ()) as _,
         );
 
-        DetourDetach(&REAL_OPENFILE as *const _ as _, (TrapOpenFile as *const ()) as _);
+        DetourDetach(
+            &REAL_OPENFILE as *const _ as _,
+            (TrapOpenFile as *const ()) as _,
+        );
 
         DetourDetach(
             &REAL_CREATEPROCESSA as *const _ as _,
@@ -1307,9 +1379,11 @@ impl TrapInfo {
             (TrapCreateProcessW as *const ()) as _,
         );
 
-        DetourDetach(&REALENTRYPOINT as *const _  as _,
-                     (TrapEntryPoint as *const ()) as _);
-         // msvc
+        DetourDetach(
+            &REALENTRYPOINT as *const _ as _,
+            (TrapEntryPoint as *const ()) as _,
+        );
+        // msvc
         if REAL_GETENV != std::ptr::null_mut() {
             DetourDetach(
                 &REAL_GETENV as *const _ as _,
@@ -1452,7 +1526,7 @@ unsafe extern "C" fn Trap_wdupenv_s(
 }
 unsafe extern "system" fn TrapEntryPoint() {
     type Proctype = fn();
-    let realapi : Proctype = std::mem::transmute(REALENTRYPOINT);
+    let realapi: Proctype = std::mem::transmute(REALENTRYPOINT);
     if FindMsvcr() {
         REAL_GETENV = GetProcAddress(S_HMSVCR as _, "getenv\0".as_ptr() as _) as _;
         REAL_WGETENV = GetProcAddress(S_HMSVCR as _, "_wgetenv\0".as_ptr() as _) as _;
@@ -1464,12 +1538,30 @@ unsafe extern "system" fn TrapEntryPoint() {
         detours::DetourTransactionBegin();
         detours::DetourUpdateThread(GetCurrentThread() as _);
 
-        detours::DetourAttach(&REAL_GETENV as *const _ as _, ((&Trap_getenv) as *const _) as _);
-        detours::DetourAttach(&REAL_GETENV_S as *const _ as _, (&Trap_getenv_s as *const _) as _);
-        detours::DetourAttach(&REAL_WGETENV as *const _ as _, (&Trap_wgetenv as *const _) as _);
-        detours::DetourAttach(&REAL_WGETENV as *const _ as _, (&Trap_wgetenv_s as *const _) as _);
-        detours::DetourAttach(&REAL_DUPENV_S as *const _ as _, (&Trap_dupenv_s as *const _) as _);
-        detours::DetourAttach(&REAL_WDUPENV_S as *const _ as _, (&Trap_wdupenv_s as *const _) as _);
+        detours::DetourAttach(
+            &REAL_GETENV as *const _ as _,
+            ((&Trap_getenv) as *const _) as _,
+        );
+        detours::DetourAttach(
+            &REAL_GETENV_S as *const _ as _,
+            (&Trap_getenv_s as *const _) as _,
+        );
+        detours::DetourAttach(
+            &REAL_WGETENV as *const _ as _,
+            (&Trap_wgetenv as *const _) as _,
+        );
+        detours::DetourAttach(
+            &REAL_WGETENV as *const _ as _,
+            (&Trap_wgetenv_s as *const _) as _,
+        );
+        detours::DetourAttach(
+            &REAL_DUPENV_S as *const _ as _,
+            (&Trap_dupenv_s as *const _) as _,
+        );
+        detours::DetourAttach(
+            &REAL_WDUPENV_S as *const _ as _,
+            (&Trap_wdupenv_s as *const _) as _,
+        );
         detours::DetourTransactionCommit();
     }
     realapi();
@@ -1486,6 +1578,19 @@ pub unsafe extern "system" fn TrapCreateProcessA(
     lpStartupInfo: LPSTARTUPINFOA,
     lpProcessInformation: LPPROCESS_INFORMATION,
 ) -> BOOL {
+    use winapi::um::handleapi::CloseHandle;
+    let mut ppi: LPPROCESS_INFORMATION = lpProcessInformation;
+    let null = std::ptr::null_mut();
+    let mut pi: PROCESS_INFORMATION = PROCESS_INFORMATION {
+        hProcess: null as _,
+        hThread: null as _,
+        dwProcessId: 0,
+        dwThreadId: 0,
+    };
+    if ppi == null {
+        ppi = &mut pi;
+    }
+
     type Proctype = unsafe extern "system" fn(
         lpApplicationName: LPCSTR,
         lpCommandLine: LPSTR,
@@ -1498,8 +1603,8 @@ pub unsafe extern "system" fn TrapCreateProcessA(
         lpStartupInfo: LPSTARTUPINFOA,
         lpProcessInformation: LPPROCESS_INFORMATION,
     ) -> BOOL;
-    let realapi : Proctype = std::mem::transmute(REAL_CREATEPROCESSA);
-    realapi(
+    let realapi: Proctype = std::mem::transmute(REAL_CREATEPROCESSA);
+    if detours::DetourCreateProcessWithDllA(
         lpApplicationName,
         lpCommandLine,
         lpProcessAttributes,
@@ -1509,8 +1614,32 @@ pub unsafe extern "system" fn TrapCreateProcessA(
         lpEnvironment,
         lpCurrentDirectory,
         lpStartupInfo,
-        lpProcessInformation,
-    )
+        ppi,
+        DLLPATHA.as_ptr() as _,
+        Some(realapi),
+        // None
+    ) != TRUE
+    {
+        eprintln!(
+            "TRAPS: DetourCreateProcessWithDllEx failed with {}\n",
+            winapi::um::errhandlingapi::GetLastError()
+        );
+        return FALSE;
+    }
+    if lpCommandLine != std::ptr::null_mut() {
+        let _ = record_event(lpCommandLine, FileEventType::Exec)
+            .map_err(|x| eprintln!("record failed in detouring process:{}", x));
+    } else {
+        let _ = record_event(lpApplicationName, FileEventType::Exec)
+            .map_err(|x| eprintln!("record failed in detouring process:{}", x));
+    }
+
+    if ppi == &mut pi as *mut _ {
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+    }
+
+    return TRUE;
 }
 
 pub unsafe extern "system" fn TrapCreateProcessW(
@@ -1525,7 +1654,7 @@ pub unsafe extern "system" fn TrapCreateProcessW(
     lpStartupInfo: LPSTARTUPINFOW,
     lpProcessInformation: LPPROCESS_INFORMATION,
 ) -> BOOL {
-    println!("spwnedw!\n");
+    use winapi::um::handleapi::CloseHandle;
     type Proctype = unsafe extern "system" fn(
         lpApplicationName: LPCWSTR,
         lpCommandLine: LPWSTR,
@@ -1534,12 +1663,24 @@ pub unsafe extern "system" fn TrapCreateProcessW(
         bInheritHandles: BOOL,
         dwCreationFlags: DWORD,
         lpEnvironment: LPVOID,
-        lpCurrentDirectory: LPCWSTR,
+        lpCurrentDirectory: LPCSTR,
         lpStartupInfo: LPSTARTUPINFOW,
         lpProcessInformation: LPPROCESS_INFORMATION,
     ) -> BOOL;
-    let realapi : Proctype = std::mem::transmute(REAL_CREATEPROCESSW);
-    realapi(
+    let realapi: Proctype = std::mem::transmute(REAL_CREATEPROCESSW);
+    let mut ppi: LPPROCESS_INFORMATION = lpProcessInformation;
+    let null = std::ptr::null_mut();
+    let mut pi: PROCESS_INFORMATION = PROCESS_INFORMATION {
+        hProcess: null as _,
+        hThread: null as _,
+        dwProcessId: 0,
+        dwThreadId: 0,
+    };
+    if ppi == null {
+        ppi = &mut pi;
+    }
+
+    if detours::DetourCreateProcessWithDllW(
         lpApplicationName,
         lpCommandLine,
         lpProcessAttributes,
@@ -1549,6 +1690,29 @@ pub unsafe extern "system" fn TrapCreateProcessW(
         lpEnvironment,
         lpCurrentDirectory,
         lpStartupInfo,
-        lpProcessInformation,
-    )
+        ppi,
+        DLLPATHA.as_ptr() as _,
+        Some(realapi),
+        // None,
+    ) != TRUE
+    {
+        eprintln!(
+            "TRAPS: DetourCreateProcessWithDllEx failed with {}\n",
+            winapi::um::errhandlingapi::GetLastError()
+        );
+        return FALSE;
+    }
+    if ppi == &mut pi as *mut _ {
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+    }
+    if lpCommandLine != std::ptr::null_mut() {
+        let _ = record_event_wide(lpCommandLine, FileEventType::Exec)
+            .map_err(|x| eprintln!("record failed in detouring process:{}", x));
+    } else {
+        let _ = record_event_wide(lpApplicationName, FileEventType::Exec)
+            .map_err(|x| eprintln!("record failed in detouring process:{}", x));
+    }
+
+    return TRUE;
 }

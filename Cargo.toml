@@ -13,13 +13,7 @@ crate-type=["cdylib"]
 [dependencies]
 named_pipe = "0.4.1"
 wstr = "*"
-# widestring="0.4.0"
-# lazy_static = "1.4.0"
 winapi = { version =  "0.3.6", features = ["winnt", "processthreadsapi", "fileapi", "winbase", "synchapi", "handleapi", "libloaderapi", "errhandlingapi"] }
-# detours-sys={ version = "*", features = ["buildtime_bindgen"] }
 detours-sys = { git = "https://github.com/AlphaModder/detours-sys"}
-# kernel32-sys = ">=0.2.2"
-# advapi32-sys = "*"
-# ntapi = {version = "0.3.3"}
 # [target.tupspawn]
 # rustflags = "-ldetours"
