@@ -5,14 +5,16 @@ extern crate wstr;
 #[cfg(windows)]
 // #[macro_use]
 extern crate winapi;
+extern crate ntapi;
 // pub mod injectdylib;
 use std::io::Error;
 #[cfg(windows)]
 use winapi::{
-    shared::minwindef::{BOOL, DWORD, FALSE, HINSTANCE, HMODULE, LPVOID, TRUE},
+    shared::minwindef::{BOOL, DWORD, FALSE, LPVOID, TRUE},
     um::processthreadsapi::GetCurrentThread,
     um::winnt::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH},
 };
+use detours::{HMODULE,HINSTANCE };
 pub mod traps;
 
 pub trait IHookProcessor {

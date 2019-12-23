@@ -3,7 +3,7 @@ edition = "2018"
 name = "tupinject"
 version = "0.1.0"
 authors = ["Arun Sivaramakrishnan <arun.sivaramakrishnan@gmail.com>"]
-# links = "detours"
+build = "build.rs"
 
 [lib]
 name = "tupinject"
@@ -13,7 +13,9 @@ crate-type=["cdylib"]
 [dependencies]
 named_pipe = "0.4.1"
 wstr = "*"
-winapi = { version =  "0.3.6", features = ["winnt", "processthreadsapi", "fileapi", "winbase", "synchapi", "handleapi", "libloaderapi", "errhandlingapi"] }
-detours-sys = { git = "https://github.com/AlphaModder/detours-sys"}
+winapi = { version =  "0.3.6", features = ["winnt", "processthreadsapi", "fileapi", "winbase", "synchapi", "handleapi", "libloaderapi", "errhandlingapi", "wow64apiset"] }
+detours-sys = {git = "https://github.com/DianaNites/detours", features = ["buildtime_bindgen"] }
+ntapi = "0.3.3"
+ 
 # [target.tupspawn]
 # rustflags = "-ldetours"
