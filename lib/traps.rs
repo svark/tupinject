@@ -16,7 +16,6 @@ use winapi::shared::ntdef::{
     POBJECT_ATTRIBUTES,
 };
 use winapi::{
-    // shared::guiddef::GUID,
     um::handleapi::INVALID_HANDLE_VALUE,
     um::libloaderapi::{GetModuleHandleW, GetProcAddress},
 };
@@ -139,31 +138,19 @@ static mut REAL_NTOPENFILE: FARPROC = std::ptr::null_mut() as _;
 fn record_event(lpFileName: LPCSTR, evt: FileEventType) -> std::result::Result<usize, Error> {
     let pid = unsafe { GetCurrentProcessId() };
     let fname = unsafe { CStr::from_ptr(lpFileName).to_str().unwrap() };
-    let print = || -> std::result::Result<usize, Error> {
-        let mut client = PipeClient::connect(TBLOG_PIPE_NAME)?;
-        let mut readbuf = [0u8;1];
-        use std::io::Read;
-         client.read(&mut readbuf[..])?;
-        client.write(
-            format!(
-                "------\n{}\t{},\t{}----*----\n",
-                fname,
-                pid.to_string(),
-                evt.to_string()
-            )
-            .as_bytes(),
+    let mut client = PipeClient::connect(TBLOG_PIPE_NAME)?;
+    let mut readbuf = [0u8;1];
+    use std::io::Read;
+    client.read(&mut readbuf[..])?;
+    client.write(
+        format!(
+            "------\n{}\t{},\t{}----*----\n",
+            fname,
+            pid.to_string(),
+            evt.to_string()
         )
-    };
-    // eprintln!("{}---?---\n", evt.to_string());
-    let mut iter = 0;
-    while let Err(err) = print() {
-        std::thread::sleep(std::time::Duration::new(0, 10));
-        iter = iter + 1;
-        if iter > 5 {
-            return Err(err);
-        }
-    }
-    Ok(1)
+            .as_bytes(),
+    )
 }
 
 // wide string version of the above
@@ -177,7 +164,7 @@ fn record_event_wide(lpFileName: LPCWSTR, evt: FileEventType) -> std::result::Re
     }
     record_event_wide_len(lpFileName, len, evt)
 }
-
+// writes the file sys event on lpFileName to the pipe
 fn record_event_wide_len(
     lpFileName: LPCWSTR,
     len: isize,
@@ -186,28 +173,16 @@ fn record_event_wide_len(
     let pid = unsafe { GetCurrentProcessId() };
     let name = unsafe { std::slice::from_raw_parts(lpFileName as *const u16, len as usize) };
     let u16str: OsString = OsStringExt::from_wide(name);
-    let print = || -> std::result::Result<usize, Error> {
-        let mut client = PipeClient::connect(TBLOG_PIPE_NAME)?;
-        // eprintln!("{}\n", "connected" );
-        client.write(
-            format!(
-                "----\n{}\t{}\t{}----*-----\n",
-                u16str.to_str().unwrap(),
-                pid.to_string(),
-                evt.to_string()
-            )
-            .as_bytes(),
+    let mut client = PipeClient::connect(TBLOG_PIPE_NAME)?;
+    client.write(
+        format!(
+            "----\n{}\t{}\t{}----*-----\n",
+            u16str.to_str().unwrap(),
+            pid.to_string(),
+            evt.to_string()
         )
-    };
-    let mut iter = 0;
-    while let Err(err) = print() {
-        std::thread::sleep(std::time::Duration::new(0, 10));
-        iter = iter + 1;
-        if iter > 5 {
-            return Err(err);
-        }
-    }
-    Ok(1)
+            .as_bytes(),
+    )
 }
 
 unsafe extern "system" fn TrapDeleteFileA(lpFileName: LPCSTR) -> BOOL {
@@ -410,112 +385,6 @@ unsafe extern "system" fn TrapSetFileAttributesW(
     ret
 }
 
-// pub unsafe extern "system" fn TrapCreateFileA(
-//     lpFileName: LPCSTR,
-//     dwDesiredAccess: DWORD,
-//     dwShareMode: DWORD,
-//     lpSecurityAttributes: LPSECURITY_ATTRIBUTES,
-//     dwCreationDisposition: DWORD,
-//     dwFlagsAndAttributes: DWORD,
-//     hTemplateFile: HANDLE,
-// ) -> HANDLE {
-//     type ProcType = unsafe extern "system" fn(
-//         LPCSTR,
-//         DWORD,
-//         DWORD,
-//         LPSECURITY_ATTRIBUTES,
-//         DWORD,
-//         DWORD,
-//         HANDLE,
-//     ) -> HANDLE;
-//     let realapi: ProcType = std::mem::transmute(REAL_CREATEFILEA);
-//     let handle = realapi(
-//         lpFileName,
-//         dwDesiredAccess,
-//         dwShareMode,
-//         lpSecurityAttributes,
-//         dwCreationDisposition,
-//         dwFlagsAndAttributes,
-//         hTemplateFile,
-//     );
-
-//     if handle != INVALID_HANDLE_VALUE
-//         && winapi::um::fileapi::GetFileType(handle as _) == winapi::um::winbase::FILE_TYPE_DISK
-//     {
-//         if dwDesiredAccess & TUP_UNLINK_FLAGS != 0 || dwShareMode & TUP_UNLINK_FLAGS != 0 {
-//             let _ = record_event(lpFileName, FileEventType::Unlink).map_err(|x| {
-//                 eprintln!("record failed in createfilea unlink {}", x);
-//                 0
-//             });
-//         } else if dwDesiredAccess & TUP_CREATE_WRITE_FLAGS != 0 {
-//             let _ = record_event(lpFileName, FileEventType::Write).map_err(|x| {
-//                 eprintln!("record failed in cretatefilea write:{}", x);
-//                 0
-//             });
-//         } else {
-//             let _ = record_event(lpFileName, FileEventType::Read).map_err(|x| {
-//                 eprintln!(
-//                     "record failed in cretatefilea read:{}\n{:?}",
-//                     x,
-//                     CStr::from_ptr(lpFileName)
-//                 );
-//                 0
-//             });
-//         }
-//     }
-//     handle
-// }
-// pub unsafe extern "system" fn TrapCreateFileW(
-//     lpFileName: LPCWSTR,
-//     dwDesiredAccess: DWORD,
-//     dwShareMode: DWORD,
-//     lpSecurityAttributes: LPSECURITY_ATTRIBUTES,
-//     dwCreationDisposition: DWORD,
-//     dwFlagsAndAttributes: DWORD,
-//     hTemplateFile: HANDLE,
-// ) -> HANDLE {
-//     type ProcType = unsafe extern "system" fn(
-//         lpFileName: LPCWSTR,
-//         dwDesiredAccess: DWORD,
-//         dwShareMode: DWORD,
-//         lpSecurityAttributes: LPSECURITY_ATTRIBUTES,
-//         dwCreationDisposition: DWORD,
-//         dwFlagsAndAttributes: DWORD,
-//         hTemplateFile: HANDLE,
-//     ) -> HANDLE;
-//     let realapi: ProcType = std::mem::transmute(REAL_CREATEFILEW);
-//     let handle = realapi(
-//         lpFileName,
-//         dwDesiredAccess,
-//         dwShareMode,
-//         lpSecurityAttributes,
-//         dwCreationDisposition,
-//         dwFlagsAndAttributes,
-//         hTemplateFile,
-//     );
-
-//     if handle != INVALID_HANDLE_VALUE
-//         && winapi::um::fileapi::GetFileType(handle as _) == winapi::um::winbase::FILE_TYPE_DISK
-//     {
-//         if dwDesiredAccess & TUP_UNLINK_FLAGS != 0 || dwShareMode & TUP_UNLINK_FLAGS != 0 {
-//             let _ = record_event_wide(lpFileName, FileEventType::Unlink).map_err(|x| {
-//                 eprintln!("createfilew: {}", x);
-//                 0
-//             });
-//         } else if dwDesiredAccess & TUP_CREATE_WRITE_FLAGS != 0 {
-//             let _ = record_event_wide(lpFileName, FileEventType::Write).map_err(|x| {
-//                 eprintln!("createfilew:{}", x);
-//                 0
-//             });
-//         } else {
-//             let _ = record_event_wide(lpFileName, FileEventType::Read).map_err(|x| {
-//                 eprintln!("createfilew:{}", x);
-//                 0
-//             });
-//         }
-//     }
-//     handle
-// }
 
 pub unsafe extern "system" fn TrapCopyFile2(
     pwszExistingFileName: PCWSTR,
