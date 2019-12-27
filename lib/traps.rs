@@ -1,54 +1,32 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 //     //TODO:                          SetFileInformationByHandle
-use named_pipe::PipeClient;
-use std::io::Write;
-use winapi::um::libloaderapi::{GetModuleFileNameA, GetModuleFileNameW};
-use winapi::um::processthreadsapi::{GetCurrentProcessId, GetCurrentProcess, GetCurrentThread};
 use detours::LPPROCESS_INFORMATION;
 use detours::LPSTARTUPINFOA;
 use detours::LPSTARTUPINFOW;
 use detours::_PROCESS_INFORMATION as PROCESS_INFORMATION;
-use winapi::shared::ntdef::{
-    NTSTATUS,
-    PHANDLE,
-    PLARGE_INTEGER,
-    POBJECT_ATTRIBUTES,
-};
-use winapi::{
-    um::handleapi::INVALID_HANDLE_VALUE,
-    um::libloaderapi::{GetModuleHandleW, GetProcAddress},
-};
-use winapi::um::winnt::{ACCESS_MASK};
+use named_pipe::PipeClient;
+use std::io::Write;
+use winapi::shared::ntdef::{NTSTATUS, PHANDLE, PLARGE_INTEGER, POBJECT_ATTRIBUTES};
+use winapi::um::libloaderapi::{GetModuleFileNameA, GetModuleFileNameW};
+use winapi::um::libloaderapi::{GetModuleHandleW, GetProcAddress};
+use winapi::um::processthreadsapi::{GetCurrentProcess, GetCurrentProcessId, GetCurrentThread};
+use winapi::um::winnt::ACCESS_MASK;
 
 use detours::LPSECURITY_ATTRIBUTES;
 use detours::_GUID as GUID;
 use detours::{HINSTANCE, HMODULE};
 use ntapi::ntioapi::PIO_STATUS_BLOCK;
+use winapi::um::fileapi::INVALID_FILE_ATTRIBUTES;
+use winapi::um::winnt::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_TEMPORARY};
 use winapi::{
-    shared::minwindef::{
-        BOOL,
-        DWORD,
-        FALSE,
-        FARPROC,
-        LPBOOL,
-        LPVOID,
-        TRUE,
-        UINT,
-        ULONG,
-    },
-    um::minwinbase::{
-        FINDEX_INFO_LEVELS,
-        FINDEX_SEARCH_OPS,
-        GET_FILEEX_INFO_LEVELS,
-        // LPSECURITY_ATTRIBUTES,
-        LPWIN32_FIND_DATAA,
-        LPWIN32_FIND_DATAW,
-    },
+    shared::minwindef::{BOOL, DWORD, FALSE, FARPROC, LPBOOL, LPVOID, TRUE, UINT, ULONG},
+    um::minwinbase::GET_FILEEX_INFO_LEVELS,
     um::winbase::{COPYFILE2_EXTENDED_PARAMETERS, LPOFSTRUCT, LPPROGRESS_ROUTINE},
     um::winnt::{
-        CHAR, DELETE, FILE_GENERIC_WRITE, GENERIC_WRITE, HANDLE, HRESULT, LPCSTR, LPCWSTR, LPSTR,
-        LPWSTR, PCHAR, PCSTR, PCWSTR, PVOID, PWCHAR, WCHAR, WRITE_DAC, WRITE_OWNER,
+        CHAR, DELETE, FILE_APPEND_DATA, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, FILE_WRITE_EA,
+        GENERIC_WRITE, HANDLE, HRESULT, LPCSTR, LPCWSTR, LPSTR, LPWSTR, PCHAR, PCSTR, PCWSTR,
+        PVOID, PWCHAR, WCHAR, WRITE_DAC, WRITE_OWNER,
     },
     // um::synchapi::{InitializeCriticalSection},
 };
@@ -79,8 +57,13 @@ const OF_CREATE: u32 = 0x00001000;
 // const OF_EXIST:u32 = 0x00004000;
 // const OF_REOPEN:u32 = 0x00008000;
 
-pub const TUP_CREATE_WRITE_FLAGS: u32 =
-    (GENERIC_WRITE | FILE_GENERIC_WRITE | WRITE_OWNER | WRITE_DAC);
+pub const TUP_CREATE_WRITE_FLAGS: u32 = (GENERIC_WRITE
+    | FILE_WRITE_DATA
+    | FILE_WRITE_ATTRIBUTES
+    | FILE_WRITE_EA
+    | FILE_APPEND_DATA
+    | WRITE_OWNER
+    | WRITE_DAC);
 pub const TUP_UNLINK_FLAGS: u32 = DELETE;
 // use std::ptr;
 use std::ffi::CStr;
@@ -103,18 +86,12 @@ impl ToString for FileEventType {
 
 static mut REAL_DELETEFILEA: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_DELETEFILEW: FARPROC = std::ptr::null_mut() as _;
-static mut REAL_FINDFIRSTFILEA: FARPROC = std::ptr::null_mut() as _;
-static mut REAL_FINDFIRSTFILEW: FARPROC = std::ptr::null_mut() as _;
-static mut REAL_FINDFIRSTFILEEXA: FARPROC = std::ptr::null_mut() as _;
-static mut REAL_FINDFIRSTFILEEXW: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_GETFILEATTRIBUTESA: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_GETFILEATTRIBUTESW: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_GETFILEATTRIBUTESEXA: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_GETFILEATTRIBUTESEXW: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_SETFILEATTRIBUTESA: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_SETFILEATTRIBUTESW: FARPROC = std::ptr::null_mut() as _;
-// static mut REAL_CREATEFILEA: FARPROC = std::ptr::null_mut() as _;
-// static mut REAL_CREATEFILEW: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_COPYFILE2: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_COPYFILEA: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_COPYFILEEXA: FARPROC = std::ptr::null_mut() as _;
@@ -134,12 +111,12 @@ static mut REAL_CREATEPROCESSW: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_NTCREATEFILE: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_NTOPENFILE: FARPROC = std::ptr::null_mut() as _;
 
-//
+// send file event in pipe back to server
 fn record_event(lpFileName: LPCSTR, evt: FileEventType) -> std::result::Result<usize, Error> {
     let pid = unsafe { GetCurrentProcessId() };
     let fname = unsafe { CStr::from_ptr(lpFileName).to_str().unwrap() };
     let mut client = PipeClient::connect(TBLOG_PIPE_NAME)?;
-    let mut readbuf = [0u8;1];
+    let mut readbuf = [0u8; 1];
     use std::io::Read;
     client.read(&mut readbuf[..])?;
     client.write(
@@ -149,7 +126,7 @@ fn record_event(lpFileName: LPCSTR, evt: FileEventType) -> std::result::Result<u
             pid.to_string(),
             evt.to_string()
         )
-            .as_bytes(),
+        .as_bytes(),
     )
 }
 
@@ -181,7 +158,7 @@ fn record_event_wide_len(
             pid.to_string(),
             evt.to_string()
         )
-            .as_bytes(),
+        .as_bytes(),
     )
 }
 
@@ -206,106 +183,16 @@ unsafe extern "system" fn TrapDeleteFileW(lpFileName: LPCWSTR) -> BOOL {
     }
     ret
 }
-unsafe extern "system" fn TrapFindFirstFileA(
-    lpFileName: LPCSTR,
-    lpFindFileData: LPWIN32_FIND_DATAA,
-) -> HANDLE {
-    type ProcType =
-        extern "system" fn(lpFileName: LPCSTR, lpFindFileData: LPWIN32_FIND_DATAA) -> HANDLE;
-    let realapi: ProcType = std::mem::transmute(REAL_FINDFIRSTFILEA);
 
-    let ret = realapi(lpFileName, lpFindFileData);
-    if ret != INVALID_HANDLE_VALUE {
-        let _ = record_event(lpFileName, FileEventType::Read);
-    }
-    ret
-}
-unsafe extern "system" fn TrapFindFirstFileW(
-    lpFileName: LPCWSTR,
-    lpFindFileData: LPWIN32_FIND_DATAW,
-) -> HANDLE {
-    type ProcType = unsafe extern "system" fn(
-        lpFileName: LPCWSTR,
-        lpFindFileData: LPWIN32_FIND_DATAW,
-    ) -> HANDLE;
-    let realapi: ProcType = std::mem::transmute(REAL_FINDFIRSTFILEW);
-
-    let ret = realapi(lpFileName, lpFindFileData);
-    let _ = record_event_wide(lpFileName, FileEventType::Read)
-        .map_err(|x| eprintln!("record failed in findfirstfilew:{}", x));
-    ret
-}
-unsafe extern "system" fn TrapFindFirstFileExA(
-    lpFileName: LPCSTR,
-    fInfoLevelId: FINDEX_INFO_LEVELS,
-    lpFindFileData: LPVOID,
-    fSearchOp: FINDEX_SEARCH_OPS,
-    lpSearchFilter: LPVOID,
-    dwAdditionalFlags: DWORD,
-) -> HANDLE {
-    type ProcType = extern "system" fn(
-        lpFileName: LPCSTR,
-        fInfoLevelId: FINDEX_INFO_LEVELS,
-        lpFindFileData: LPVOID,
-        fSearchOp: FINDEX_SEARCH_OPS,
-        lpSearchFilter: LPVOID,
-        dwAdditionalFlags: DWORD,
-    ) -> HANDLE;
-    let realapi: ProcType = std::mem::transmute(REAL_FINDFIRSTFILEEXA);
-
-    let ret = realapi(
-        lpFileName,
-        fInfoLevelId,
-        lpFindFileData,
-        fSearchOp,
-        lpSearchFilter,
-        dwAdditionalFlags,
-    );
-    if ret != INVALID_HANDLE_VALUE {
-        let _ = record_event(lpFileName, FileEventType::Read)
-            .map_err(|x| eprintln!("record failed in findfirstfileexa:{}", x));
-    }
-    ret
-}
-unsafe extern "system" fn TrapFindFirstFileExW(
-    lpFileName: LPCWSTR,
-    fInfoLevelId: FINDEX_INFO_LEVELS,
-    lpFindFileData: LPVOID,
-    fSearchOp: FINDEX_SEARCH_OPS,
-    lpSearchFilter: LPVOID,
-    dwAdditionalFlags: DWORD,
-) -> HANDLE {
-    type ProcType = unsafe extern "system" fn(
-        lpFileName: LPCWSTR,
-        fInfoLevelId: FINDEX_INFO_LEVELS,
-        lpFindFileData: LPVOID,
-        fSearchOp: FINDEX_SEARCH_OPS,
-        lpSearchFilter: LPVOID,
-        dwAdditionalFlags: DWORD,
-    ) -> HANDLE;
-    let realapi: ProcType = std::mem::transmute(REAL_FINDFIRSTFILEEXW);
-
-    let ret = realapi(
-        lpFileName,
-        fInfoLevelId,
-        lpFindFileData,
-        fSearchOp,
-        lpSearchFilter,
-        dwAdditionalFlags,
-    );
-    if ret != INVALID_HANDLE_VALUE {
-        let _ = record_event_wide(lpFileName, FileEventType::Read)
-            .map_err(|x| eprintln!("record failed in findfirstfileexw:{}", x));
-    }
-    ret
-}
 unsafe extern "system" fn TrapGetFileAttributesA(lpFileName: LPCSTR) -> DWORD {
     type ProcType = extern "system" fn(lpFileName: LPCSTR) -> DWORD;
     let realapi: ProcType = std::mem::transmute(REAL_GETFILEATTRIBUTESA);
 
     let ret = realapi(lpFileName);
-    let _ = record_event(lpFileName, FileEventType::Read)
-        .map_err(|x| eprintln!("record failed in GetFileAttributesA:{}", x));
+    if ret != INVALID_FILE_ATTRIBUTES && (ret & FILE_ATTRIBUTE_DIRECTORY == 0) {
+        let _ = record_event(lpFileName, FileEventType::Read)
+            .map_err(|x| eprintln!("record failed in GetFileAttributesA:{}", x));
+    }
     ret
 }
 unsafe extern "system" fn TrapGetFileAttributesW(lpFileName: LPCWSTR) -> DWORD {
@@ -313,8 +200,10 @@ unsafe extern "system" fn TrapGetFileAttributesW(lpFileName: LPCWSTR) -> DWORD {
     let realapi: ProcType = std::mem::transmute(REAL_GETFILEATTRIBUTESW);
 
     let ret = realapi(lpFileName);
-    let _ = record_event_wide(lpFileName, FileEventType::Read)
-        .map_err(|x| eprintln!("record failed in GetFileAttributesW:{}", x));
+    if ret != INVALID_FILE_ATTRIBUTES && (ret & FILE_ATTRIBUTE_DIRECTORY == 0) {
+        let _ = record_event_wide(lpFileName, FileEventType::Read)
+            .map_err(|x| eprintln!("record failed in GetFileAttributesW:{}", x));
+    }
     ret
 }
 unsafe extern "system" fn TrapGetFileAttributesExA(
@@ -331,11 +220,15 @@ unsafe extern "system" fn TrapGetFileAttributesExA(
 
     let ret = realapi(lpFileName, fInfoLevelId, lpFileInformation);
     if ret != FALSE {
-        let _ = record_event(lpFileName, FileEventType::Write)
-            .map_err(|x| eprintln!("record failed in GetFileAttributesExA:{}", x));
+        let attrib: *const DWORD = std::mem::transmute(lpFileInformation); // first field in WIN32_FILE_ATTRIBUTE_DATA is attib dword
+        if (*attrib & FILE_ATTRIBUTE_DIRECTORY == 0) && (*attrib & FILE_ATTRIBUTE_TEMPORARY == 0) {
+            let _ = record_event(lpFileName, FileEventType::Write)
+                .map_err(|x| eprintln!("record failed in GetFileAttributesExA:{}", x));
+        }
     }
     ret
 }
+
 unsafe extern "system" fn TrapGetFileAttributesExW(
     lpFileName: LPCWSTR,
     fInfoLevelId: GET_FILEEX_INFO_LEVELS,
@@ -350,11 +243,15 @@ unsafe extern "system" fn TrapGetFileAttributesExW(
 
     let ret = realapi(lpFileName, fInfoLevelId, lpFileInformation);
     if ret != FALSE {
-        let _ = record_event_wide(lpFileName, FileEventType::Write)
-            .map_err(|x| eprintln!("record failed in GetFileAttributesExW:{}", x));
+        let attrib: *const DWORD = std::mem::transmute(lpFileInformation); // first field in WIN32_FILE_ATTRIBUTE_DATA is attib dword
+        if (*attrib & FILE_ATTRIBUTE_DIRECTORY == 0) && (*attrib & FILE_ATTRIBUTE_TEMPORARY == 0) {
+            let _ = record_event_wide(lpFileName, FileEventType::Write)
+                .map_err(|x| eprintln!("record failed in GetFileAttributesExW:{}", x));
+        }
     }
     ret
 }
+
 unsafe extern "system" fn TrapSetFileAttributesA(
     lpFileName: LPCSTR,
     dwFileAttributes: DWORD,
@@ -384,7 +281,6 @@ unsafe extern "system" fn TrapSetFileAttributesW(
     }
     ret
 }
-
 
 pub unsafe extern "system" fn TrapCopyFile2(
     pwszExistingFileName: PCWSTR,
@@ -763,7 +659,6 @@ pub unsafe extern "system" fn TrapOpenFile(
 }
 
 pub type EntryPointType = unsafe extern "system" fn();
-// unsafe extern "system" fn empty_entry_point() {}
 type BigPath = [WCHAR; 1024];
 type BigPathA = [CHAR; 1024];
 
@@ -909,7 +804,7 @@ impl TrapInfo {
 
     pub unsafe fn attach(&self) {
         use detours::DetourAttach;
-		// std::thread::sleep_ms(10000);// uncomment for debug purposes
+        // std::thread::sleep_ms(20000); // uncomment for debug purposes
         detours::DetourUpdateThread(GetCurrentThread() as _);
         let kstr = wstr!("kernel32\0");
         let nstr = wstr!("ntdll\0");
@@ -927,34 +822,6 @@ impl TrapInfo {
             &REAL_DELETEFILEW as *const _ as _,
             (TrapDeleteFileW as *const ()) as _,
         );
-        let realapi = GetProcAddress(hkernel32, "FindFirstFileA\0".as_ptr() as _);
-        REAL_FINDFIRSTFILEA = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_FINDFIRSTFILEA as *const _ as _,
-            (TrapFindFirstFileA as *const ()) as _,
-        );
-
-        let realapi = GetProcAddress(hkernel32, "FindFirstFileW\0".as_ptr() as _);
-        REAL_FINDFIRSTFILEW = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_FINDFIRSTFILEW as *const _ as _,
-            (TrapFindFirstFileW as *const ()) as _,
-        );
-
-        let realapi = GetProcAddress(hkernel32, "FindFirstFileExA\0".as_ptr() as _);
-        REAL_FINDFIRSTFILEEXA = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_FINDFIRSTFILEEXA as *const _ as _,
-            (TrapFindFirstFileExA as *const ()) as _,
-        );
-
-        let realapi = GetProcAddress(hkernel32, "FindFirstFileExW\0".as_ptr() as _);
-        REAL_FINDFIRSTFILEEXW = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_FINDFIRSTFILEEXW as *const _ as _,
-            (TrapFindFirstFileExW as *const ()) as _,
-        );
-
         let realapi = GetProcAddress(hkernel32, "GetFileAttributesA\0".as_ptr() as _);
         REAL_GETFILEATTRIBUTESA = std::mem::transmute(realapi);
         DetourAttach(
@@ -996,20 +863,6 @@ impl TrapInfo {
             &REAL_SETFILEATTRIBUTESW as *const _ as _,
             (TrapSetFileAttributesW as *const ()) as _,
         );
-
-        // let realapi = GetProcAddress(hkernel32, "CreateFileA\0".as_ptr() as _);
-        // REAL_CREATEFILEA = std::mem::transmute(realapi);
-        // DetourAttach(
-        //     &REAL_CREATEFILEA as *const _ as _,
-        //     (TrapCreateFileA as *const ()) as _,
-        // );
-
-        // let realapi = GetProcAddress(hkernel32, "CreateFileW\0".as_ptr() as _);
-        // REAL_CREATEFILEW = std::mem::transmute(realapi);
-        // DetourAttach(
-        //     &REAL_CREATEFILEW as *const _ as _,
-        //     (TrapCreateFileW as *const ()) as _,
-        // );
 
         let realapi = GetProcAddress(hkernel32, "CopyFile2\0".as_ptr() as _);
         REAL_COPYFILE2 = std::mem::transmute(realapi);
@@ -1142,7 +995,6 @@ impl TrapInfo {
             (TrapNtOpenFile as *const ()) as _,
         );
 
-
         // std::thread::sleep_ms(10000);
     }
 
@@ -1156,25 +1008,6 @@ impl TrapInfo {
         DetourDetach(
             &REAL_DELETEFILEW as *const _ as _,
             (TrapDeleteFileW as *const ()) as _,
-        );
-        DetourDetach(
-            &REAL_FINDFIRSTFILEA as *const _ as _,
-            (TrapFindFirstFileA as *const ()) as _,
-        );
-
-        DetourDetach(
-            &REAL_FINDFIRSTFILEW as *const _ as _,
-            (TrapFindFirstFileW as *const ()) as _,
-        );
-
-        DetourDetach(
-            &REAL_FINDFIRSTFILEEXA as *const _ as _,
-            (TrapFindFirstFileExA as *const ()) as _,
-        );
-
-        DetourDetach(
-            &REAL_FINDFIRSTFILEEXW as *const _ as _,
-            (TrapFindFirstFileExW as *const ()) as _,
         );
 
         DetourDetach(
@@ -1206,16 +1039,6 @@ impl TrapInfo {
             &REAL_SETFILEATTRIBUTESW as *const _ as _,
             (TrapSetFileAttributesW as *const ()) as _,
         );
-
-        // DetourDetach(
-        //     &REAL_CREATEFILEA as *const _ as _,
-        //     (TrapCreateFileA as *const ()) as _,
-        // );
-
-        // DetourDetach(
-        //     &REAL_CREATEFILEW as *const _ as _,
-        //     (TrapCreateFileW as *const ()) as _,
-        // );
 
         DetourDetach(
             &REAL_COPYFILE2 as *const _ as _,
@@ -1516,7 +1339,24 @@ pub unsafe extern "system" fn TrapCreateProcessA(
     if ppi == null {
         ppi = &mut pi;
     }
+    let paths = match std::env::var_os("PATH") {
+        Some(path) => std::env::split_paths(&path).collect::<Vec<_>>(),
+        None => vec![],
+    };
+    let iswow: BOOL = FALSE;
+    winapi::um::wow64apiset::IsWow64Process(GetCurrentProcess(), &iswow as *const _ as _);
+    let mut PXX: &'static str = "tupinject64.dll";
+    if iswow != FALSE {
+        PXX = "tupinject32.dll";
+    }
 
+    let paths = paths
+        .iter()
+        .map(|pb| pb.as_path().join(PXX))
+        .find(|x| x.is_file())
+        .expect(format!("{} not found in path", PXX).as_str());
+    let dllpath = std::ffi::CString::new(paths.to_str().unwrap());
+    let dllpathptr = dllpath.unwrap();
     #[cfg(target_arch = "x86")]
     type Proctype = unsafe extern "stdcall" fn(
         lpApplicationName: LPCSTR,
@@ -1544,15 +1384,7 @@ pub unsafe extern "system" fn TrapCreateProcessA(
         lpProcessInformation: LPPROCESS_INFORMATION,
     ) -> BOOL;
 
-    static P64: &'static str = "C:\\Apps\\tuprsws\\target\\debug\\tupinject64.dll\0";
-    static P32: &'static str = "C:\\Apps\\tuprsws\\target\\debug\\tupinject32.dll\0";
-    let mut PXX = P64;
-    let iswow: BOOL = FALSE;
-    winapi::um::wow64apiset::IsWow64Process(GetCurrentProcess(), &iswow as *const _  as _);
-    if iswow != FALSE {
-        PXX = P32;
-    }
-    let dllpaths: [*const i8; 2] = [PXX.as_ptr() as _, P32.as_ptr() as _];
+    let dllpaths: [*const i8; 1] = [dllpathptr.as_bytes_with_nul().as_ptr() as _];
     let realapi: Proctype = std::mem::transmute(REAL_CREATEPROCESSA);
     if detours::DetourCreateProcessWithDllsA(
         lpApplicationName,
@@ -1568,7 +1400,6 @@ pub unsafe extern "system" fn TrapCreateProcessA(
         1,
         dllpaths.as_ptr() as _,
         Some(realapi),
-        // None
     ) != TRUE
     {
         eprintln!(
@@ -1644,16 +1475,26 @@ pub unsafe extern "system" fn TrapCreateProcessW(
     if ppi == null {
         ppi = &mut pi;
     }
-    static P64: &'static str = "C:\\Apps\\tuprsws\\target\\debug\\tupinject64.dll\0";
-    static P32: &'static str = "C:\\Apps\\tuprsws\\target\\debug\\tupinject32.dll\0";
-    let mut PXX = P64;
+    let paths = match std::env::var_os("PATH") {
+        Some(path) => std::env::split_paths(&path).collect::<Vec<_>>(),
+        None => vec![],
+    };
     let iswow: BOOL = FALSE;
-    winapi::um::wow64apiset::IsWow64Process(GetCurrentProcess(), &iswow as *const _  as _);
+    winapi::um::wow64apiset::IsWow64Process(GetCurrentProcess(), &iswow as *const _ as _);
+    let mut PXX: &'static str = "tupinject64.dll";
     if iswow != FALSE {
-        PXX = P32;
+        PXX = "tupinject32.dll";
     }
-    let dllpaths: [*const i8; 2] = [PXX.as_ptr() as _, P32.as_ptr() as _];
 
+    let paths = paths
+        .iter()
+        .map(|pb| pb.as_path().join(PXX))
+        .find(|x| x.is_file())
+        .expect("tupinjec64.dll not found in path");
+    let dllpath = std::ffi::CString::new(paths.to_str().unwrap());
+    let dllpathptr = dllpath.unwrap();
+
+    let dllpaths: [*const i8; 1] = [dllpathptr.as_bytes_with_nul().as_ptr() as _];
     if detours::DetourCreateProcessWithDllsW(
         lpApplicationName,
         lpCommandLine,
@@ -1666,10 +1507,8 @@ pub unsafe extern "system" fn TrapCreateProcessW(
         lpStartupInfo,
         ppi,
         1,
-        // DLLPATHW.as_ptr() as _,
         dllpaths.as_ptr() as _,
         Some(realapi),
-        // None,
     ) != TRUE
     {
         eprintln!(
@@ -1693,14 +1532,13 @@ pub unsafe extern "system" fn TrapCreateProcessW(
     return TRUE;
 }
 pub unsafe extern "system" fn TrapNtOpenFile(
-        FileHandle: PHANDLE,
-        DesiredAccess: ACCESS_MASK,
-        ObjectAttributes: POBJECT_ATTRIBUTES,
-        IoStatusBlock: PIO_STATUS_BLOCK,
-        ShareAccess: ULONG,
-        OpenOptions: ULONG,
-) -> NTSTATUS
-{
+    FileHandle: PHANDLE,
+    DesiredAccess: ACCESS_MASK,
+    ObjectAttributes: POBJECT_ATTRIBUTES,
+    IoStatusBlock: PIO_STATUS_BLOCK,
+    ShareAccess: ULONG,
+    OpenOptions: ULONG,
+) -> NTSTATUS {
     type Proctype = unsafe extern "system" fn(
         FileHandle: PHANDLE,
         DesiredAccess: ACCESS_MASK,
@@ -1709,38 +1547,86 @@ pub unsafe extern "system" fn TrapNtOpenFile(
         ShareAccess: ULONG,
         OpenOptions: ULONG,
     ) -> NTSTATUS;
-    let realapi : Proctype = std::mem::transmute(REAL_NTOPENFILE);
+    let realapi: Proctype = std::mem::transmute(REAL_NTOPENFILE);
     let ret = realapi(
-        FileHandle, DesiredAccess, ObjectAttributes,
-        IoStatusBlock, ShareAccess, OpenOptions);
+        FileHandle,
+        DesiredAccess,
+        ObjectAttributes,
+        IoStatusBlock,
+        ShareAccess,
+        OpenOptions,
+    );
     let uni = (*ObjectAttributes).ObjectName;
-    if ret == winapi::shared::ntstatus::STATUS_SUCCESS && *FileHandle != std::ptr::null_mut()
-        && winapi::um::fileapi::GetFileType(*FileHandle)
-        == winapi::um::winbase::FILE_TYPE_DISK
+    if ret == winapi::shared::ntstatus::STATUS_SUCCESS
+        && *FileHandle != std::ptr::null_mut()
+        && winapi::um::fileapi::GetFileType(*FileHandle) == winapi::um::winbase::FILE_TYPE_DISK
+        && Some(false) == is_directory(*FileHandle)
     {
         let buf = (*uni).Buffer;
         let write = DesiredAccess & TUP_CREATE_WRITE_FLAGS != 0;
-        let unlink = (DesiredAccess & TUP_UNLINK_FLAGS != 0 )|| (OpenOptions & ntapi::ntioapi::FILE_DELETE_ON_CLOSE != 0);
-        if unlink {
-            let _ = record_event_wide_len(buf,
-                                          ((*uni).Length >> 1) as isize,
-                                          FileEventType::Unlink)
-                .map_err(|x| eprintln!("record failed in unlink:trapntopenfile:{}", x));
-        }
-        else if write {
-            let _ = record_event_wide_len(buf,
-                                          ((*uni).Length >> 1) as isize, FileEventType::Write)
+        let unlink = (DesiredAccess & TUP_UNLINK_FLAGS != 0)
+            || (OpenOptions & ntapi::ntioapi::FILE_DELETE_ON_CLOSE != 0);
+        if write {
+            let _ = record_event_wide_len(buf, ((*uni).Length >> 1) as isize, FileEventType::Write)
                 .map_err(|x| eprintln!("record failed in write:trapntopenfile:{}", x));
+        } else if unlink {
+            let _ =
+                record_event_wide_len(buf, ((*uni).Length >> 1) as isize, FileEventType::Unlink)
+                    .map_err(|x| eprintln!("record failed in unlink:trapntopenfile:{}", x));
         } else {
-            let _ = record_event_wide_len(buf,
-                                          ((*uni).Length >> 1) as isize, FileEventType::Read)
+            let _ = record_event_wide_len(buf, ((*uni).Length >> 1) as isize, FileEventType::Read)
                 .map_err(|x| eprintln!("record failed in read:trapntopenfile:{}", x));
         }
-
     }
     ret
-
 }
+
+// unsafe fn GetFileName(FileHandle : PHANDLE)
+// {
+//     use winapi::um::fileapi::{
+//         BY_HANDLE_FILE_INFORMATION,
+//         GetFileInformationByHandle, GetFileType,
+//     };
+//     use winapi::um::winnt;
+//     use winapi::um::fileapi::FILE_NAME_INFO;
+//     use winapi::um::minwinbase::FileNameInfo;
+//     use std::ffi::OsString;
+//     use std::mem;
+//     use std::os::raw::c_void;
+//     use std::os::windows::ffi::OsStringExt;
+//     use std::slice;
+//     let size = mem::size_of::<FILE_NAME_INFO>();
+//     let mut name_info_bytes = vec![0u8; size + (1<<15)];
+//     let res = GetFileInformationByHandle(handle,
+//                                            FileNameInfo,
+//                                            &mut *name_info_bytes as *mut _ as *mut c_void,
+//                                            name_info_bytes.len() as u32);
+//     if res == 0 {
+//         return true;
+//     }
+//     let name_info: FILE_NAME_INFO = *(name_info_bytes[0..size]
+//                                       .as_ptr() as *const FILE_NAME_INFO);
+//     let name_bytes = &name_info_bytes[size..size + name_info.FileNameLength as usize];
+//     let name_u16 = slice::from_raw_parts(name_bytes.as_ptr() as *const u16,
+//                                          name_bytes.len() / 2);
+//     let name = OsString::from_wide(name_u16)
+//         .as_os_str()
+//         .to_string_lossy()
+//         .into_owned();
+// }
+fn is_directory(filehandle: HANDLE) -> Option<bool> {
+    use winapi::um::fileapi::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+
+    unsafe {
+        let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
+        let rc = GetFileInformationByHandle(filehandle, &mut info);
+        if rc == 0 {
+            return None;
+        }
+        return Some(info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY) != 0);
+    }
+}
+
 pub unsafe extern "system" fn TrapNtCreateFile(
     FileHandle: PHANDLE,
     DesiredAccess: ACCESS_MASK,
@@ -1783,26 +1669,23 @@ pub unsafe extern "system" fn TrapNtCreateFile(
     );
     if ret == winapi::shared::ntstatus::STATUS_SUCCESS
         && *FileHandle != std::ptr::null_mut()
-        && winapi::um::fileapi::GetFileType(*FileHandle)
-        == winapi::um::winbase::FILE_TYPE_DISK
+        && winapi::um::fileapi::GetFileType(*FileHandle) == winapi::um::winbase::FILE_TYPE_DISK
+        && Some(false) == is_directory(*FileHandle)
     {
         let uni = (*ObjectAttributes).ObjectName;
-        let buf = (*uni).Buffer;
+        let buf = (*uni).Buffer; //todo: use ObjectAttributes.RootDirectory for rel paths
         let write = DesiredAccess & TUP_CREATE_WRITE_FLAGS != 0;
-        let unlink = (DesiredAccess & TUP_UNLINK_FLAGS != 0 )|| (CreateOptions & ntapi::ntioapi::FILE_DELETE_ON_CLOSE != 0);
-        if unlink {
-           let _ = record_event_wide_len(buf,
-                                         ((*uni).Length >> 1) as isize,
-                                         FileEventType::Unlink)
-                .map_err(|x| eprintln!("record failed in unlink:trapntcreatefile:{}", x));
-        }
-        else if write {
-            let _ = record_event_wide_len(buf,
-                                          ((*uni).Length >> 1) as isize, FileEventType::Write)
+        let unlink = (DesiredAccess & TUP_UNLINK_FLAGS != 0)
+            || (CreateOptions & ntapi::ntioapi::FILE_DELETE_ON_CLOSE != 0);
+        if write {
+            let _ = record_event_wide_len(buf, ((*uni).Length >> 1) as isize, FileEventType::Write)
                 .map_err(|x| eprintln!("record failed in write:trapntcreatefile:{}", x));
+        } else if unlink {
+            let _ =
+                record_event_wide_len(buf, ((*uni).Length >> 1) as isize, FileEventType::Unlink)
+                    .map_err(|x| eprintln!("record failed in unlink:trapntcreatefile:{}", x));
         } else {
-            let _ = record_event_wide_len(buf,
-                                          ((*uni).Length >> 1) as isize, FileEventType::Read)
+            let _ = record_event_wide_len(buf, ((*uni).Length >> 1) as isize, FileEventType::Read)
                 .map_err(|x| eprintln!("record failed in read:trapntcreatefile:{}", x));
         }
     }

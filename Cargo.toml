@@ -17,5 +17,3 @@ winapi = { version =  "0.3.6", features = ["winnt", "processthreadsapi", "fileap
 detours-sys = {git = "https://github.com/DianaNites/detours", features = ["buildtime_bindgen"] }
 ntapi = "0.3.3"
  
-# [target.tupspawn]
-# rustflags = "-ldetours"

@@ -1,8 +1,9 @@
 @setlocal
 pushd %~pd0
 set LIBCLANG_PATH=%LIBCLANG32_PATH%
-if %LIBCLANG_PATH%=="" (
-echo please provide libclang32_path (32bit version of llvm\bin)
+if "%LIBCLANG_PATH%"=="" (
+echo please provide libclang32_path -32bit version of llvm\bin
+popd
 exit /b 0
 )
 call rustup default nightly-i686-pc-windows-msvc

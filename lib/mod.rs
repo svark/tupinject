@@ -2,11 +2,12 @@ extern crate detours_sys as detours;
 extern crate named_pipe;
 #[macro_use]
 extern crate wstr;
+extern crate ntapi;
 #[cfg(windows)]
 // #[macro_use]
 extern crate winapi;
-extern crate ntapi;
 // pub mod injectdylib;
+use detours::{HINSTANCE, HMODULE};
 use std::io::Error;
 #[cfg(windows)]
 use winapi::{
@@ -14,7 +15,6 @@ use winapi::{
     um::processthreadsapi::GetCurrentThread,
     um::winnt::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH},
 };
-use detours::{HMODULE,HINSTANCE };
 pub mod traps;
 
 pub trait IHookProcessor {
