@@ -30,6 +30,21 @@ use winapi::{
     },
     // um::synchapi::{InitializeCriticalSection},
 };
+macro_rules! attach_proc {
+    ($dll:ident, $lit:literal, $e:ident, $m:ident) => {
+        let realapi = GetProcAddress($dll as _, $lit.as_ptr() as _);
+        $e = std::mem::transmute(realapi);
+        detours::DetourAttach(&$e as *const _ as _, ($m as *const ()) as _);
+    };
+}
+
+macro_rules! detach_proc {
+    ($e:ident, $m:ident) => {
+        if $e != std::ptr::null_mut() {
+            detours::DetourDetach(&$e as *const _ as _, ($m as *const ()) as _);
+        }
+    };
+}
 // use detours::
 
 // {9640B7B0-CA4D-4D61-9A27-79C709A31EB0}
@@ -801,179 +816,88 @@ impl TrapInfo {
     pub fn valid(&self) -> bool {
         self.hInst == std::ptr::null_mut() as _
     }
-
     pub unsafe fn attach(&self) {
         use detours::DetourAttach;
         // std::thread::sleep_ms(20000); // uncomment for debug purposes
         detours::DetourUpdateThread(GetCurrentThread() as _);
         let kstr = wstr!("kernel32\0");
+        let kbasestr = wstr!("kernelbase\0");
         let nstr = wstr!("ntdll\0");
-        let hkernel32 = GetModuleHandleW(kstr.as_ptr());
-        let ntapi = GetModuleHandleW(nstr.as_ptr());
-        let realapi = GetProcAddress(hkernel32, "DeleteFileA\0".as_ptr() as _);
-        REAL_DELETEFILEA = realapi;
-        DetourAttach(
-            &REAL_DELETEFILEA as *const _ as _,
-            (TrapDeleteFileA as *const ()) as _,
+        let k32 = GetModuleHandleW(kstr.as_ptr());
+        let kbase = GetModuleHandleW(kbasestr.as_ptr());
+        attach_proc!(k32, "DeleteFileA\0", REAL_DELETEFILEA, TrapDeleteFileA);
+        attach_proc!(k32, "DeleteFileW\0", REAL_DELETEFILEW, TrapDeleteFileW);
+        attach_proc!(
+            k32,
+            "GetFileAttributesA\0",
+            REAL_GETFILEATTRIBUTESA,
+            TrapGetFileAttributesA
         );
-        let realapi = GetProcAddress(hkernel32, "DeleteFileW\0".as_ptr() as _);
-        REAL_DELETEFILEW = realapi;
-        DetourAttach(
-            &REAL_DELETEFILEW as *const _ as _,
-            (TrapDeleteFileW as *const ()) as _,
+        attach_proc!(
+            k32,
+            "GetFileAttributesW\0",
+            REAL_GETFILEATTRIBUTESW,
+            TrapGetFileAttributesW
         );
-        let realapi = GetProcAddress(hkernel32, "GetFileAttributesA\0".as_ptr() as _);
-        REAL_GETFILEATTRIBUTESA = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_GETFILEATTRIBUTESA as *const _ as _,
-            (TrapGetFileAttributesA as *const ()) as _,
+        attach_proc!(
+            k32,
+            "GetFileAttributesExA\0",
+            REAL_GETFILEATTRIBUTESEXA,
+            TrapGetFileAttributesExA
         );
-
-        let realapi = GetProcAddress(hkernel32, "GetFileAttributesW\0".as_ptr() as _);
-        REAL_GETFILEATTRIBUTESW = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_GETFILEATTRIBUTESW as *const _ as _,
-            (TrapGetFileAttributesW as *const ()) as _,
+        attach_proc!(
+            k32,
+            "GetFileAttributesExW\0",
+            REAL_GETFILEATTRIBUTESEXW,
+            TrapGetFileAttributesExW
         );
-
-        let realapi = GetProcAddress(hkernel32, "GetFileAttributesExA\0".as_ptr() as _);
-        REAL_GETFILEATTRIBUTESEXA = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_GETFILEATTRIBUTESEXA as *const _ as _,
-            (TrapGetFileAttributesExA as *const ()) as _,
+        attach_proc!(
+            k32,
+            "SetFileAttributesA\0",
+            REAL_SETFILEATTRIBUTESA,
+            TrapSetFileAttributesA
         );
-
-        let realapi = GetProcAddress(hkernel32, "GetFileAttributesExW\0".as_ptr() as _);
-        REAL_GETFILEATTRIBUTESEXW = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_GETFILEATTRIBUTESEXW as *const _ as _,
-            (TrapGetFileAttributesExW as *const ()) as _,
+        attach_proc!(
+            k32,
+            "SetFileAttributesW\0",
+            REAL_SETFILEATTRIBUTESW,
+            TrapSetFileAttributesW
         );
-
-        let realapi = GetProcAddress(hkernel32, "SetFileAttributesA\0".as_ptr() as _);
-        REAL_SETFILEATTRIBUTESA = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_SETFILEATTRIBUTESA as *const _ as _,
-            (TrapSetFileAttributesA as *const ()) as _,
+        attach_proc!(k32, "CopyFile2\0", REAL_COPYFILE2, TrapCopyFile2);
+        attach_proc!(k32, "CopyFileA\0", REAL_COPYFILEA, TrapCopyFileA);
+        attach_proc!(k32, "CopyFileW\0", REAL_COPYFILEW, TrapCopyFileW);
+        attach_proc!(k32, "CopyFileExA\0", REAL_COPYFILEEXA, TrapCopyFileExA);
+        attach_proc!(k32, "CopyFileExW\0", REAL_COPYFILEEXW, TrapCopyFileExW);
+        attach_proc!(
+            k32,
+            "CopyFileTransactedA\0",
+            REAL_COPYFILETRANSACTEDA,
+            TrapCopyFileTransactedA
         );
-
-        let realapi = GetProcAddress(hkernel32, "SetFileAttributesW\0".as_ptr() as _);
-        REAL_SETFILEATTRIBUTESW = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_SETFILEATTRIBUTESW as *const _ as _,
-            (TrapSetFileAttributesW as *const ()) as _,
+        attach_proc!(
+            k32,
+            "CopyFileTransactedW\0",
+            REAL_COPYFILETRANSACTEDW,
+            TrapCopyFileTransactedW
         );
-
-        let realapi = GetProcAddress(hkernel32, "CopyFile2\0".as_ptr() as _);
-        REAL_COPYFILE2 = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_COPYFILE2 as *const _ as _,
-            (TrapCopyFile2 as *const ()) as _,
+        attach_proc!(k32, "ReplaceFileA\0", REAL_REPLACEFILEA, TrapReplaceFileA);
+        attach_proc!(k32, "ReplaceFileW\0", REAL_REPLACEFILEW, TrapReplaceFileW);
+        attach_proc!(k32, "MoveFileA\0", REAL_MOVEFILEA, TrapMoveFileA);
+        attach_proc!(k32, "MoveFileW\0", REAL_MOVEFILEW, TrapMoveFileW);
+        attach_proc!(k32, "MoveFileExA\0", REAL_MOVEFILEEXA, TrapMoveFileExA);
+        attach_proc!(kbase, "MoveFileExW\0", REAL_MOVEFILEEXW, TrapMoveFileExW);
+        attach_proc!(k32, "OpenFile\0", REAL_OPENFILE, TrapOpenFile);
+        attach_proc!(
+            k32,
+            "CreateProcessA\0",
+            REAL_CREATEPROCESSA,
+            TrapCreateProcessA
         );
-
-        let realapi = GetProcAddress(hkernel32, "CopyFileA\0".as_ptr() as _);
-        REAL_COPYFILEA = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_COPYFILEA as *const _ as _,
-            (TrapCopyFileA as *const ()) as _,
-        );
-
-        let realapi = GetProcAddress(hkernel32, "CopyFileW\0".as_ptr() as _);
-        REAL_COPYFILEW = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_COPYFILEW as *const _ as _,
-            (TrapCopyFileW as *const ()) as _,
-        );
-
-        let realapi = GetProcAddress(hkernel32, "CopyFileExA\0".as_ptr() as _);
-        REAL_COPYFILEEXA = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_COPYFILEEXA as *const _ as _,
-            (TrapCopyFileExA as *const ()) as _,
-        );
-
-        let realapi = GetProcAddress(hkernel32, "CopyFileExW\0".as_ptr() as _);
-        REAL_COPYFILEEXW = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_COPYFILEEXW as *const _ as _,
-            (TrapCopyFileExW as *const ()) as _,
-        );
-
-        let realapi = GetProcAddress(hkernel32, "CopyFileTransactedA\0".as_ptr() as _);
-        REAL_COPYFILETRANSACTEDA = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_COPYFILETRANSACTEDA as *const _ as _,
-            (TrapCopyFileTransactedA as *const ()) as _,
-        );
-
-        let realapi = GetProcAddress(hkernel32, "CopyFileTransactedW\0".as_ptr() as _);
-        REAL_COPYFILETRANSACTEDW = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_COPYFILETRANSACTEDW as *const _ as _,
-            (TrapCopyFileTransactedW as *const ()) as _,
-        );
-
-        let realapi = GetProcAddress(hkernel32, "ReplaceFileA\0".as_ptr() as _);
-        REAL_REPLACEFILEA = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_REPLACEFILEA as *const _ as _,
-            (TrapReplaceFileA as *const ()) as _,
-        );
-
-        let realapi = GetProcAddress(hkernel32, "ReplaceFileW\0".as_ptr() as _);
-        REAL_REPLACEFILEW = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_REPLACEFILEW as *const _ as _,
-            (TrapReplaceFileW as *const ()) as _,
-        );
-
-        let realapi = GetProcAddress(hkernel32, "MoveFileA\0".as_ptr() as _);
-        REAL_MOVEFILEA = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_MOVEFILEA as *const _ as _,
-            (TrapMoveFileA as *const ()) as _,
-        );
-
-        let realapi = GetProcAddress(hkernel32, "MoveFileW\0".as_ptr() as _);
-        REAL_MOVEFILEW = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_MOVEFILEW as *const _ as _,
-            (TrapMoveFileW as *const ()) as _,
-        );
-
-        let realapi = GetProcAddress(hkernel32, "MoveFileExA\0".as_ptr() as _);
-        REAL_MOVEFILEEXA = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_MOVEFILEEXA as *const _ as _,
-            (TrapMoveFileExA as *const ()) as _,
-        );
-
-        let realapi = GetProcAddress(hkernel32, "MoveFileExW\0".as_ptr() as _);
-        REAL_MOVEFILEEXW = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_MOVEFILEEXW as *const _ as _,
-            (TrapMoveFileExW as *const ()) as _,
-        );
-
-        let realapi = GetProcAddress(hkernel32, "OpenFile\0".as_ptr() as _);
-        REAL_OPENFILE = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_OPENFILE as *const _ as _,
-            (TrapOpenFile as *const ()) as _,
-        );
-
-        let realapi = GetProcAddress(hkernel32, "CreateProcessA\0".as_ptr() as _);
-        REAL_CREATEPROCESSA = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_CREATEPROCESSA as *const _ as _,
-            (TrapCreateProcessA as *const ()) as _,
-        );
-
-        let realapi = GetProcAddress(hkernel32, "CreateProcessW\0".as_ptr() as _);
-        REAL_CREATEPROCESSW = std::mem::transmute(realapi);
-        DetourAttach(
-            &REAL_CREATEPROCESSW as *const _ as _,
-            (TrapCreateProcessW as *const ()) as _,
+        attach_proc!(
+            k32,
+            "CreateProcessW\0",
+            REAL_CREATEPROCESSW,
+            TrapCreateProcessW
         );
         let ep = detours::DetourGetEntryPoint(std::ptr::null_mut() as _);
         REALENTRYPOINT = ep as _;
@@ -981,195 +905,59 @@ impl TrapInfo {
             &REALENTRYPOINT as *const _ as _,
             (TrapEntryPoint as *const ()) as _,
         );
-
-        let ntcf = GetProcAddress(ntapi, "NtCreateFile\0".as_ptr() as _);
-        REAL_NTCREATEFILE = std::mem::transmute(ntcf);
-        DetourAttach(
-            &REAL_NTCREATEFILE as *const _ as _,
-            (TrapNtCreateFile as *const ()) as _,
-        );
-        let ntcf = GetProcAddress(ntapi, "NtOpenFile\0".as_ptr() as _);
-        REAL_NTOPENFILE = std::mem::transmute(ntcf);
-        DetourAttach(
-            &REAL_NTOPENFILE as *const _ as _,
-            (TrapNtOpenFile as *const ()) as _,
-        );
-
-        // std::thread::sleep_ms(10000);
+        let ntapi = GetModuleHandleW(nstr.as_ptr());
+        attach_proc!(ntapi, "NtCreateFile\0", REAL_NTCREATEFILE, TrapNtCreateFile);
+        attach_proc!(ntapi, "NtOpenFile\0", REAL_NTOPENFILE, TrapNtOpenFile);
+        // attach_proc!(ntapi, "NtCreateUserProcess\0", REAL_NTOPENFILE, TrapNtOpenFile);
     }
 
     pub unsafe fn detach(&self) {
-        use detours::DetourDetach;
-        // let ptrap = TrapEntryPoint as *const ();
-        DetourDetach(
-            &REAL_DELETEFILEA as *const _ as _,
-            (TrapDeleteFileA as *const ()) as _,
-        );
-        DetourDetach(
-            &REAL_DELETEFILEW as *const _ as _,
-            (TrapDeleteFileW as *const ()) as _,
-        );
+        detach_proc!(REAL_DELETEFILEA, TrapDeleteFileA);
+        detach_proc!(REAL_DELETEFILEW, TrapDeleteFileW);
 
-        DetourDetach(
-            &REAL_GETFILEATTRIBUTESA as *const _ as _,
-            (TrapGetFileAttributesA as *const ()) as _,
-        );
+        detach_proc!(REAL_GETFILEATTRIBUTESA, TrapGetFileAttributesA);
+        detach_proc!(REAL_GETFILEATTRIBUTESW, TrapGetFileAttributesW);
 
-        DetourDetach(
-            &REAL_GETFILEATTRIBUTESW as *const _ as _,
-            (TrapGetFileAttributesW as *const ()) as _,
-        );
+        detach_proc!(REAL_GETFILEATTRIBUTESEXA, TrapGetFileAttributesExA);
+        detach_proc!(REAL_GETFILEATTRIBUTESEXW, TrapGetFileAttributesExW);
 
-        DetourDetach(
-            &REAL_GETFILEATTRIBUTESEXA as *const _ as _,
-            (TrapGetFileAttributesExA as *const ()) as _,
-        );
+        detach_proc!(REAL_SETFILEATTRIBUTESA, TrapSetFileAttributesA);
+        detach_proc!(REAL_SETFILEATTRIBUTESW, TrapSetFileAttributesW);
 
-        DetourDetach(
-            &REAL_GETFILEATTRIBUTESEXW as *const _ as _,
-            (TrapGetFileAttributesExW as *const ()) as _,
-        );
+        detach_proc!(REAL_COPYFILE2, TrapCopyFile2);
+        detach_proc!(REAL_COPYFILEA, TrapCopyFileA);
+        detach_proc!(REAL_COPYFILEW, TrapCopyFileW);
 
-        DetourDetach(
-            &REAL_SETFILEATTRIBUTESA as *const _ as _,
-            (TrapSetFileAttributesA as *const ()) as _,
-        );
+        detach_proc!(REAL_COPYFILEEXA, TrapCopyFileExA);
+        detach_proc!(REAL_COPYFILEEXW, TrapCopyFileExW);
 
-        DetourDetach(
-            &REAL_SETFILEATTRIBUTESW as *const _ as _,
-            (TrapSetFileAttributesW as *const ()) as _,
-        );
+        detach_proc!(REAL_COPYFILETRANSACTEDA, TrapCopyFileTransactedA);
+        detach_proc!(REAL_COPYFILETRANSACTEDW, TrapCopyFileTransactedW);
 
-        DetourDetach(
-            &REAL_COPYFILE2 as *const _ as _,
-            (TrapCopyFile2 as *const ()) as _,
-        );
+        detach_proc!(REAL_REPLACEFILEA, TrapReplaceFileA);
+        detach_proc!(REAL_REPLACEFILEW, TrapReplaceFileW);
 
-        DetourDetach(
-            &REAL_COPYFILEA as *const _ as _,
-            (TrapCopyFileA as *const ()) as _,
-        );
+        detach_proc!(REAL_MOVEFILEA, TrapMoveFileA);
+        detach_proc!(REAL_MOVEFILEW, TrapMoveFileW);
 
-        DetourDetach(
-            &REAL_COPYFILEW as *const _ as _,
-            (TrapCopyFileW as *const ()) as _,
-        );
+        detach_proc!(REAL_MOVEFILEEXA, TrapMoveFileExA);
+        detach_proc!(REAL_MOVEFILEEXW, TrapMoveFileExW);
 
-        DetourDetach(
-            &REAL_COPYFILEEXA as *const _ as _,
-            (TrapCopyFileExA as *const ()) as _,
-        );
+        detach_proc!(REAL_OPENFILE, TrapOpenFile);
 
-        DetourDetach(
-            &REAL_COPYFILEEXW as *const _ as _,
-            (TrapCopyFileExW as *const ()) as _,
-        );
+        detach_proc!(REAL_CREATEPROCESSA, TrapCreateProcessA);
+        detach_proc!(REAL_CREATEPROCESSW, TrapCreateProcessW);
 
-        DetourDetach(
-            &REAL_COPYFILETRANSACTEDA as *const _ as _,
-            (TrapCopyFileTransactedA as *const ()) as _,
-        );
+        detach_proc!(REALENTRYPOINT, TrapEntryPoint);
+        detach_proc!(REAL_NTCREATEFILE, TrapNtCreateFile);
+        detach_proc!(REAL_NTOPENFILE, TrapNtOpenFile);
 
-        DetourDetach(
-            &REAL_COPYFILETRANSACTEDW as *const _ as _,
-            (TrapCopyFileTransactedW as *const ()) as _,
-        );
-
-        DetourDetach(
-            &REAL_REPLACEFILEA as *const _ as _,
-            (TrapReplaceFileA as *const ()) as _,
-        );
-
-        DetourDetach(
-            &REAL_REPLACEFILEW as *const _ as _,
-            (TrapReplaceFileW as *const ()) as _,
-        );
-
-        DetourDetach(
-            &REAL_MOVEFILEA as *const _ as _,
-            (TrapMoveFileA as *const ()) as _,
-        );
-
-        DetourDetach(
-            &REAL_MOVEFILEW as *const _ as _,
-            (TrapMoveFileW as *const ()) as _,
-        );
-
-        DetourDetach(
-            &REAL_MOVEFILEEXA as *const _ as _,
-            (TrapMoveFileExA as *const ()) as _,
-        );
-
-        DetourDetach(
-            &REAL_MOVEFILEEXW as *const _ as _,
-            (TrapMoveFileExW as *const ()) as _,
-        );
-
-        DetourDetach(
-            &REAL_OPENFILE as *const _ as _,
-            (TrapOpenFile as *const ()) as _,
-        );
-
-        DetourDetach(
-            &REAL_CREATEPROCESSA as *const _ as _,
-            (TrapCreateProcessA as *const ()) as _,
-        );
-
-        DetourDetach(
-            &REAL_CREATEPROCESSW as *const _ as _,
-            (TrapCreateProcessW as *const ()) as _,
-        );
-
-        DetourDetach(
-            &REALENTRYPOINT as *const _ as _,
-            (TrapEntryPoint as *const ()) as _,
-        );
-
-        DetourDetach(
-            &REAL_NTCREATEFILE as *const _ as _,
-            (TrapNtCreateFile as *const ()) as _,
-        );
-        DetourDetach(
-            &REAL_NTOPENFILE as *const _ as _,
-            (TrapNtOpenFile as *const ()) as _,
-        );
-        // msvc
-        if REAL_GETENV != std::ptr::null_mut() {
-            DetourDetach(
-                &REAL_GETENV as *const _ as _,
-                (Trap_getenv as *const ()) as _,
-            );
-        }
-        if REAL_WGETENV != std::ptr::null_mut() {
-            DetourDetach(
-                &REAL_WGETENV as *const _ as _,
-                (Trap_wgetenv as *const ()) as _,
-            );
-        }
-        if REAL_GETENV_S != std::ptr::null_mut() {
-            DetourDetach(
-                &REAL_GETENV_S as *const _ as _,
-                (Trap_getenv_s as *const ()) as _,
-            );
-        }
-        if REAL_WGETENV_S != std::ptr::null_mut() {
-            DetourDetach(
-                &REAL_WGETENV_S as *const _ as _,
-                (Trap_wgetenv_s as *const ()) as _,
-            );
-        }
-        if REAL_DUPENV_S != std::ptr::null_mut() {
-            DetourDetach(
-                &REAL_DUPENV_S as *const _ as _,
-                (Trap_dupenv_s as *const ()) as _,
-            );
-        }
-        if REAL_WDUPENV_S != std::ptr::null_mut() {
-            DetourDetach(
-                &REAL_WDUPENV_S as *const _ as _,
-                (Trap_wdupenv_s as *const ()) as _,
-            );
-        }
+        detach_proc!(REAL_GETENV, Trap_getenv);
+        detach_proc!(REAL_WGETENV, Trap_wgetenv);
+        detach_proc!(REAL_GETENV_S, Trap_getenv_s);
+        detach_proc!(REAL_WGETENV_S, Trap_wgetenv_s);
+        detach_proc!(REAL_DUPENV_S, Trap_dupenv_s);
+        detach_proc!(REAL_WDUPENV_S, Trap_wdupenv_s);
     }
 }
 type Real_wgetenvType = unsafe extern "C" fn(var: PCWSTR) -> PCWSTR;
@@ -1277,40 +1065,16 @@ unsafe extern "system" fn TrapEntryPoint() {
     type Proctype = fn();
     let realapi: Proctype = std::mem::transmute(REALENTRYPOINT);
     if FindMsvcr() {
-        REAL_GETENV = GetProcAddress(S_HMSVCR as _, "getenv\0".as_ptr() as _) as _;
-        REAL_WGETENV = GetProcAddress(S_HMSVCR as _, "_wgetenv\0".as_ptr() as _) as _;
-        REAL_GETENV_S = GetProcAddress(S_HMSVCR as _, "getenv_s\0".as_ptr() as _) as _;
-        REAL_WGETENV_S = GetProcAddress(S_HMSVCR as _, "_wgetenv_s\0".as_ptr() as _) as _;
-        REAL_DUPENV_S = GetProcAddress(S_HMSVCR as _, "_dupenv_s\0".as_ptr() as _) as _;
-        REAL_WDUPENV_S = GetProcAddress(S_HMSVCR as _, "_wdupenv_s\0".as_ptr() as _) as _;
-
         detours::DetourTransactionBegin();
         detours::DetourUpdateThread(GetCurrentThread() as _);
 
-        detours::DetourAttach(
-            &REAL_GETENV as *const _ as _,
-            ((&Trap_getenv) as *const _) as _,
-        );
-        detours::DetourAttach(
-            &REAL_GETENV_S as *const _ as _,
-            (&Trap_getenv_s as *const _) as _,
-        );
-        detours::DetourAttach(
-            &REAL_WGETENV as *const _ as _,
-            (&Trap_wgetenv as *const _) as _,
-        );
-        detours::DetourAttach(
-            &REAL_WGETENV as *const _ as _,
-            (&Trap_wgetenv_s as *const _) as _,
-        );
-        detours::DetourAttach(
-            &REAL_DUPENV_S as *const _ as _,
-            (&Trap_dupenv_s as *const _) as _,
-        );
-        detours::DetourAttach(
-            &REAL_WDUPENV_S as *const _ as _,
-            (&Trap_wdupenv_s as *const _) as _,
-        );
+        attach_proc!(S_HMSVCR, "getenv\0", REAL_GETENV, Trap_getenv);
+        attach_proc!(S_HMSVCR, "getenv_s\0", REAL_GETENV_S, Trap_getenv_s);
+        attach_proc!(S_HMSVCR, "_wgetenv\0", REAL_WGETENV, Trap_wgetenv);
+        attach_proc!(S_HMSVCR, "_wgetenv_s\0", REAL_WGETENV_S, Trap_wgetenv_s);
+        attach_proc!(S_HMSVCR, "_dupenv_s\0", REAL_DUPENV_S, Trap_dupenv_s);
+        attach_proc!(S_HMSVCR, "_wdupenv_s\0", REAL_WDUPENV_S, Trap_wdupenv_s);
+
         detours::DetourTransactionCommit();
     }
     realapi();
