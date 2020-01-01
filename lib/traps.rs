@@ -8,7 +8,7 @@ use detours::_PROCESS_INFORMATION as PROCESS_INFORMATION;
 use named_pipe::PipeClient;
 use std::io::Write;
 use winapi::shared::ntdef::{NTSTATUS, PHANDLE, PLARGE_INTEGER, POBJECT_ATTRIBUTES};
-use winapi::um::libloaderapi::{GetModuleFileNameA, GetModuleFileNameW};
+use winapi::um::libloaderapi::{GetModuleFileNameW};
 use winapi::um::libloaderapi::{GetModuleHandleW, GetProcAddress};
 use winapi::um::processthreadsapi::{GetCurrentProcess, GetCurrentProcessId, GetCurrentThread};
 use winapi::um::winnt::ACCESS_MASK;
@@ -24,7 +24,7 @@ use winapi::{
     um::minwinbase::GET_FILEEX_INFO_LEVELS,
     um::winbase::{COPYFILE2_EXTENDED_PARAMETERS, LPOFSTRUCT, LPPROGRESS_ROUTINE},
     um::winnt::{
-        CHAR, DELETE, FILE_APPEND_DATA, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, FILE_WRITE_EA,
+        DELETE, FILE_APPEND_DATA, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, FILE_WRITE_EA,
         GENERIC_WRITE, HANDLE, HRESULT, LPCSTR, LPCWSTR, LPSTR, LPWSTR, PCHAR, PCSTR, PCWSTR,
         PVOID, PWCHAR, WCHAR, WRITE_DAC, WRITE_OWNER,
     },
@@ -675,7 +675,7 @@ pub unsafe extern "system" fn TrapOpenFile(
 
 pub type EntryPointType = unsafe extern "system" fn();
 type BigPath = [WCHAR; 1024];
-type BigPathA = [CHAR; 1024];
+// type BigPathA = [CHAR; 1024];
 
 const SIZEOFBIGPATH: u32 = 1024;
 #[derive(Clone)]
@@ -798,13 +798,21 @@ pub unsafe extern "system" fn FindMsvcr() -> bool {
     );
     !S_HMSVCR.is_null()
 }
-static mut DLLPATHW: BigPath = [0; SIZEOFBIGPATH as _];
-static mut DLLPATHA: BigPathA = [0; SIZEOFBIGPATH as _];
+static mut DLLPATHW: String = String::new();
 impl TrapInfo {
     pub fn new(hModule: HMODULE) -> Self {
         unsafe {
-            GetModuleFileNameW(hModule as _, (&mut DLLPATHW).as_mut_ptr(), SIZEOFBIGPATH);
-            GetModuleFileNameA(hModule as _, (&mut DLLPATHA).as_mut_ptr(), SIZEOFBIGPATH);
+            let mut dllpathw: BigPath = [0; SIZEOFBIGPATH as _];
+            GetModuleFileNameW(hModule as _, (&mut dllpathw).as_mut_ptr(), SIZEOFBIGPATH);
+            let p = { &dllpathw as *const u16 };
+            let mut len = 0;
+            while *p.offset(len) != 0 {
+                len += 1;
+            }
+
+            let name = { std::slice::from_raw_parts(&dllpathw as *const u16, len as usize) };
+            let u16str: OsString = OsStringExt::from_wide(name);
+            DLLPATHW = u16str.to_str().unwrap().to_string();
         }
         TrapInfo {
             hInst: hModule,
@@ -1103,7 +1111,7 @@ pub unsafe extern "system" fn TrapCreateProcessA(
     if ppi == null {
         ppi = &mut pi;
     }
-    let paths = match std::env::var_os("PATH") {
+    let mut paths = match std::env::var_os("PATH") {
         Some(path) => std::env::split_paths(&path).collect::<Vec<_>>(),
         None => vec![],
     };
@@ -1113,7 +1121,11 @@ pub unsafe extern "system" fn TrapCreateProcessA(
     if iswow != FALSE {
         PXX = "tupinject32.dll";
     }
-
+    if let Some(dllpath) = std::path::PathBuf::from(DLLPATHW.as_str()).parent()
+    {
+        // println!("dllpath is:{:?}", dllpath);
+        paths.push(dllpath.to_path_buf());
+    }
     let paths = paths
         .iter()
         .map(|pb| pb.as_path().join(PXX))
@@ -1239,12 +1251,16 @@ pub unsafe extern "system" fn TrapCreateProcessW(
     if ppi == null {
         ppi = &mut pi;
     }
-    let paths = match std::env::var_os("PATH") {
+    let mut paths = match std::env::var_os("PATH") {
         Some(path) => std::env::split_paths(&path).collect::<Vec<_>>(),
         None => vec![],
     };
     let iswow: BOOL = FALSE;
     winapi::um::wow64apiset::IsWow64Process(GetCurrentProcess(), &iswow as *const _ as _);
+    if let Some(dllpath) = std::path::PathBuf::from(DLLPATHW.as_str()).parent() {
+        // println!("dllpath is:{:?}", dllpath);
+        paths.push(dllpath.to_path_buf());
+    }
     let mut PXX: &'static str = "tupinject64.dll";
     if iswow != FALSE {
         PXX = "tupinject32.dll";
@@ -1254,7 +1270,7 @@ pub unsafe extern "system" fn TrapCreateProcessW(
         .iter()
         .map(|pb| pb.as_path().join(PXX))
         .find(|x| x.is_file())
-        .expect("tupinjec64.dll not found in path");
+        .expect(format!("{} not found in path", PXX).as_str());
     let dllpath = std::ffi::CString::new(paths.to_str().unwrap());
     let dllpathptr = dllpath.unwrap();
 
