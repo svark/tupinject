@@ -55,8 +55,8 @@ environment:
 # default-toolchain and default-host manually here.
 install:
   - appveyor DownloadFile https://win.rustup.rs/ -FileName rustup-init.exe
-  - appveyor DownloadFile https://releases.llvm.org/9.0.0/ -FileName LLVM-9.0.0-%arch%.exe
-  - 7z x LLVM-9.0.0-%arch%.exe -oC:\LLVM
+  - curl -fsS -o llvm.exe https://releases.llvm.org/9.0.0/LLVM-9.0.0-%arch%.exe
+  - 7z x llvm.exe -oC:\LLVM
   - rustup-init -yv --default-toolchain %channel% --default-host %target%
   - set PATH=%PATH%;%USERPROFILE%\.cargo\bin
   - set LIBCLANG_PATH=C:\LLVM\bin
