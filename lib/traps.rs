@@ -5,7 +5,7 @@ use detours::LPPROCESS_INFORMATION;
 use detours::LPSTARTUPINFOA;
 use detours::LPSTARTUPINFOW;
 use detours::_PROCESS_INFORMATION as PROCESS_INFORMATION;
-use named_pipe::PipeClient;
+// use named_pipe::PipeClient;
 use std::io::Write;
 use winapi::shared::ntdef::{NTSTATUS, PHANDLE, PLARGE_INTEGER, POBJECT_ATTRIBUTES};
 use winapi::um::libloaderapi::{GetModuleFileNameW};
@@ -30,6 +30,7 @@ use winapi::{
     },
     // um::synchapi::{InitializeCriticalSection},
 };
+use winapi::um::winbase::CREATE_SUSPENDED;
 macro_rules! attach_proc {
     ($dll:ident, $lit:literal, $e:ident, $m:ident) => {
         let realapi = GetProcAddress($dll as _, $lit.as_ptr() as _);
@@ -125,16 +126,171 @@ static mut REAL_CREATEPROCESSA: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_CREATEPROCESSW: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_NTCREATEFILE: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_NTOPENFILE: FARPROC = std::ptr::null_mut() as _;
+pub use std::os::windows::io::RawHandle;
+#[derive(Copy,Clone, Debug)]
+pub struct Handle(RawHandle);
+static mut OUTPUT_FILE_HANDLE: Handle = Handle(std::ptr::null_mut() );
+pub trait IsMinusOne {
+    fn is_minus_one(&self) -> bool;
+}
 
-// send file event in pipe back to server
+macro_rules! impl_is_minus_one {
+    ($($t:ident)*) => ($(impl IsMinusOne for $t {
+        fn is_minus_one(&self) -> bool {
+            *self == -1
+        }
+    })*)
+}
+
+impl_is_minus_one! { i8 i16 i32 i64 isize }
+use std::io;
+pub fn cvt<T: IsMinusOne>(t: T) -> io::Result<T> {
+    if t.is_minus_one() {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(t)
+    }
+}
+impl Handle {
+    fn raw(&self) -> HANDLE {
+        (self.0)
+    }
+    fn duplicate(
+        &self,
+        target_process: Handle,
+        access: DWORD,
+        inherit: bool,
+        options: DWORD,
+    ) -> io::Result<Handle> {
+        let mut ret = 0 as HANDLE;
+        cvt(unsafe {
+            let cur_proc = GetCurrentProcess();
+            use winapi::um::handleapi::DuplicateHandle;
+            DuplicateHandle(
+                cur_proc,
+                self.0,
+                target_process.raw(),
+                &mut ret,
+                access,
+                inherit as BOOL,
+                options,
+            )
+        })?;
+        Ok(Handle::new(ret))
+    }
+    pub fn new(handle: RawHandle) -> Handle {
+        Handle(handle)
+    }
+    fn write(&self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut amt = 0;
+        // WriteFile takes a DWORD (u32) for the length so it only supports
+        // writing u32::MAX bytes at a time.
+        let len = std::cmp::min(buf.len(), std::u32::MAX as usize) as DWORD;
+        use winapi::um::fileapi::WriteFile;
+
+        cvt(unsafe {
+            // use winapi::um::minwinbase::OVERLAPPED;
+            // let mut ovl: OVERLAPPED =  std::mem::zeroed() ;
+            WriteFile(
+                self.0,
+                buf.as_ptr() as LPVOID,
+                len,
+                &mut amt,
+                std::ptr::null_mut(),
+            )
+        })?;
+        Ok(amt as usize)
+    }
+    fn is_nul(&self) -> bool {
+        self.0 == std::ptr::null_mut()
+    }
+    fn flush(&self) -> io::Result<()> {
+        let handle = self.0;
+        use winapi::um::fileapi::FlushFileBuffers;
+        let result = unsafe { FlushFileBuffers(handle) };
+        if result != 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+}
+
+pub struct TrapInfo {
+    hInst: HMODULE,
+}
+
+impl Default for TrapInfo {
+    fn default() -> TrapInfo {
+        let inst: HMODULE = 0 as _;
+        TrapInfo { hInst: inst }
+    }
+}
+impl Drop for TrapInfo {
+    fn drop(&mut self) {
+        unsafe {
+            let file = OUTPUT_FILE_HANDLE;
+            if !file.is_nul() {
+                let _ = file.flush();
+            }
+        }
+    }
+}
+static mut REALENTRYPOINT: FARPROC = std::ptr::null_mut();
+//pub const TBLOG_PIPE_NAME: &'static str = "\\\\.\\pipe\\tracebuild\0";
+
+#[derive(Clone, Copy)]
+struct Payload {
+    handle: RawHandle,
+}
+
+impl Payload {
+    pub fn new(handle: RawHandle) -> Payload {
+        Payload { handle }
+    }
+    pub fn findPayLoad() -> Payload {
+        const HMODNULL: detours::HMODULE = std::ptr::null_mut() as _;
+        let finder = || -> *const Payload {
+            let mut hMod: detours::HMODULE = std::ptr::null_mut() as _;
+            while {
+                hMod = unsafe { detours::DetourEnumerateModules(hMod as _) };
+                hMod
+            } != HMODNULL
+            {
+                let mut cbData: detours::ULONG = 0;
+                let pvData: *const Payload = unsafe {
+                    detours::DetourFindPayload(hMod, &S_TRAP_GUID as _, &mut cbData as _) as _
+                };
+                if pvData != std::ptr::null() {
+                    return pvData;
+                }
+            }
+            std::ptr::null() as _
+        };
+        let pPayload = finder();
+        if pPayload != std::ptr::null() {
+            unsafe { (*pPayload).clone() }
+        } else {
+            unreachable!("Error: missing payload during dll injection");
+            // Payload::new()
+        }
+    }
+}
+
+// record file event in a file
 fn record_event(lpFileName: LPCSTR, evt: FileEventType) -> std::result::Result<usize, Error> {
     let pid = unsafe { GetCurrentProcessId() };
     let fname = unsafe { CStr::from_ptr(lpFileName).to_str().unwrap() };
-    let mut client = PipeClient::connect(TBLOG_PIPE_NAME)?;
-    let mut readbuf = [0u8; 1];
-    use std::io::Read;
-    client.read(&mut readbuf[..])?;
-    client.write(
+    // let mut client = PipeClient::connect(TBLOG_PIPE_NAME)?;
+    let file = unsafe{&OUTPUT_FILE_HANDLE};
+    if file.is_nul() {
+        return Ok(0);
+    }
+
+    // let mut readbuf = [0u8; 1];
+    // use std::io::Read;
+    // client.read(&mut readbuf[..])?;
+    file.write(
         format!(
             "------\n{}\t{},\t{}----*----\n",
             fname,
@@ -165,8 +321,13 @@ fn record_event_wide_len(
     let pid = unsafe { GetCurrentProcessId() };
     let name = unsafe { std::slice::from_raw_parts(lpFileName as *const u16, len as usize) };
     let u16str: OsString = OsStringExt::from_wide(name);
-    let mut client = PipeClient::connect(TBLOG_PIPE_NAME)?;
-    client.write(
+    // let mut client = PipeClient::connect(TBLOG_PIPE_NAME)?;
+    let file =  unsafe{&OUTPUT_FILE_HANDLE};
+    if file.is_nul() {
+        return Ok(0);
+    }
+
+    file.write(
         format!(
             "----\n{}\t{}\t{}----*-----\n",
             u16str.to_str().unwrap(),
@@ -176,7 +337,6 @@ fn record_event_wide_len(
         .as_bytes(),
     )
 }
-
 unsafe extern "system" fn TrapDeleteFileA(lpFileName: LPCSTR) -> BOOL {
     type ProcType = unsafe extern "system" fn(lpFileName: LPCSTR) -> BOOL;
     let realapi: ProcType = std::mem::transmute(REAL_DELETEFILEA);
@@ -673,81 +833,69 @@ pub unsafe extern "system" fn TrapOpenFile(
     }
 }
 
-pub type EntryPointType = unsafe extern "system" fn();
+// pub type EntryPointType = unsafe extern "system" fn();
 type BigPath = [WCHAR; 1024];
-// type BigPathA = [CHAR; 1024];
+// // type BigPathA = [CHAR; 1024];
 
 const SIZEOFBIGPATH: u32 = 1024;
-#[derive(Clone)]
-pub struct Payload {
-    depFile: BigPath,
-    varDictFile: BigPath,
-}
-pub struct TrapInfo {
-    hInst: HMODULE,
-}
+// #[derive(Clone)]
+// pub struct Payload {
+//     depFile: BigPath,
+//     varDictFile: BigPath,
+// }
+// pub struct TrapInfo {
+//     hInst: HMODULE,
+// }
 
-impl Default for TrapInfo {
-    fn default() -> TrapInfo {
-        let inst: HMODULE = 0 as _;
-        TrapInfo { hInst: inst }
-    }
-}
-static mut REALENTRYPOINT: FARPROC = std::ptr::null_mut();
-pub const TBLOG_PIPE_NAME: &'static str = "\\\\.\\pipe\\tracebuild\0";
+// impl Default for TrapInfo {
+//     fn default() -> TrapInfo {
+//         let inst: HMODULE = 0 as _;
+//         TrapInfo { hInst: inst }
+//     }
+// }
+// static mut REALENTRYPOINT: FARPROC = std::ptr::null_mut();
+// pub const TBLOG_PIPE_NAME: &'static str = "\\\\.\\pipe\\tracebuild\0";
 
-impl Payload {
-    pub fn new() -> Payload {
-        Payload {
-            depFile: [0; SIZEOFBIGPATH as _],
-            varDictFile: [0; SIZEOFBIGPATH as _],
-        }
-    }
-    pub fn findPayLoad() -> Payload {
-        const HMODNULL: HMODULE = std::ptr::null_mut() as _;
-        let finder = || -> *const Payload {
-            let mut hMod: HMODULE = std::ptr::null_mut() as _;
-            while {
-                hMod = unsafe { detours::DetourEnumerateModules(hMod as _) };
-                hMod
-            } != HMODNULL
-            {
-                let mut cbData: ULONG = 0;
-                let pvData: *const Payload = unsafe {
-                    detours::DetourFindPayload(hMod, &S_TRAP_GUID as _, &mut cbData as _) as _
-                };
-                if pvData != std::ptr::null() {
-                    return pvData;
-                }
-            }
-            std::ptr::null() as _
-        };
-        let pPayload = finder();
-        if pPayload != std::ptr::null() {
-            unsafe { (*pPayload).clone() }
-        } else {
-            unreachable!("Error: missing payload during dll injection");
-            // Payload::new()
-        }
-    }
-}
+// impl Payload {
+//     pub fn new() -> Payload {
+//         Payload {
+//             depFile: [0; SIZEOFBIGPATH as _],
+//             varDictFile: [0; SIZEOFBIGPATH as _],
+//         }
+//     }
+//     pub fn findPayLoad() -> Payload {
+//         const HMODNULL: HMODULE = std::ptr::null_mut() as _;
+//         let finder = || -> *const Payload {
+//             let mut hMod: HMODULE = std::ptr::null_mut() as _;
+//             while {
+//                 hMod = unsafe { detours::DetourEnumerateModules(hMod as _) };
+//                 hMod
+//             } != HMODNULL
+//             {
+//                 let mut cbData: ULONG = 0;
+//                 let pvData: *const Payload = unsafe {
+//                     detours::DetourFindPayload(hMod, &S_TRAP_GUID as _, &mut cbData as _) as _
+//                 };
+//                 if pvData != std::ptr::null() {
+//                     return pvData;
+//                 }
+//             }
+//             std::ptr::null() as _
+//         };
+//         let pPayload = finder();
+//         if pPayload != std::ptr::null() {
+//             unsafe { (*pPayload).clone() }
+//         } else {
+//             unreachable!("Error: missing payload during dll injection");
+//             // Payload::new()
+//         }
+//     }
+// }
 static mut S_HMSVCR: HINSTANCE = std::ptr::null_mut();
 // static mut s_pszMsvcr: *const u8 = std::ptr::null_mut();
-static S_RPSZMSVCRNAMES: [&'static str; 14] = [
-    "msvcr80.dll",
-    "msvcr80d.dll",
-    "msvcr71.dll",
-    "msvcr71d.dll",
-    "msvcr70.dll",
-    "msvcr70d.dll",
-    "msvcr90.dll",
-    "msvcr90d.dll",
-    "msvcr100.dll",
-    "msvcr100d.dll",
-    "msvcr110.dll",
-    "msvcr110d.dll",
-    "msvcr120.dll",
-    "msvcr120d.dll",
+static S_RPSZMSVCRNAMES: [&'static str; 2] = [
+    "API-MS-WIN-CORE-PROCESSENVIRONMENT-L1-2-0.DLL",
+    "msvcrt.dll"
 ];
 
 #[cfg(target_arch = "x86_64")]
@@ -799,6 +947,7 @@ pub unsafe extern "system" fn FindMsvcr() -> bool {
     !S_HMSVCR.is_null()
 }
 static mut DLLPATHW: String = String::new();
+
 impl TrapInfo {
     pub fn new(hModule: HMODULE) -> Self {
         unsafe {
@@ -813,7 +962,7 @@ impl TrapInfo {
             let name = { std::slice::from_raw_parts(&dllpathw as *const u16, len as usize) };
             let u16str: OsString = OsStringExt::from_wide(name);
             DLLPATHW = u16str.to_str().unwrap().to_string();
-        }
+       }
         TrapInfo {
             hInst: hModule,
             // zDllPath: dllPath,
@@ -825,6 +974,9 @@ impl TrapInfo {
         self.hInst == std::ptr::null_mut() as _
     }
     pub unsafe fn attach(&self) {
+         let payload = Payload::findPayLoad();
+        OUTPUT_FILE_HANDLE = Handle(payload.handle);
+
         use detours::DetourAttach;
         // std::thread::sleep_ms(20000); // uncomment for debug purposes
         detours::DetourUpdateThread(GetCurrentThread() as _);
@@ -966,6 +1118,10 @@ impl TrapInfo {
         detach_proc!(REAL_WGETENV_S, Trap_wgetenv_s);
         detach_proc!(REAL_DUPENV_S, Trap_dupenv_s);
         detach_proc!(REAL_WDUPENV_S, Trap_wdupenv_s);
+        use winapi::um::handleapi::CloseHandle;
+        if !OUTPUT_FILE_HANDLE.is_nul(){
+		        CloseHandle(OUTPUT_FILE_HANDLE.0);
+        }
     }
 }
 type Real_wgetenvType = unsafe extern "C" fn(var: PCWSTR) -> PCWSTR;
@@ -1027,14 +1183,19 @@ fn record_env_wide(var: PCWSTR) -> std::result::Result<usize, Error> {
     file.write(b"\n")
 }
 pub unsafe extern "C" fn Trap_wgetenv(var: PCWSTR) -> PCWSTR {
-    let _ = record_env_wide(var);
-    (*REAL_WGETENV)(var)
+    let ret = (*REAL_WGETENV)(var);
+    if ret != std::ptr::null() {
+        let _ = record_env_wide(var);
+    }
+    ret
 }
 pub unsafe extern "C" fn Trap_getenv(var: PCSTR) -> PCSTR {
-    let _ = record_env(var);
-    (*REAL_GETENV)(var)
+    let ret = (*REAL_GETENV)(var);
+    if ret != std::ptr::null() {
+        let _ = record_env(var);
+    }
+    ret
 }
-
 pub unsafe extern "C" fn Trap_getenv_s(
     pValue: *mut DWORD,
     pBuffer: PCHAR,
@@ -1168,7 +1329,7 @@ pub unsafe extern "system" fn TrapCreateProcessA(
         lpProcessAttributes,
         lpThreadAttributes,
         bInheritHandles,
-        dwCreationFlags,
+        dwCreationFlags | CREATE_SUSPENDED,
         lpEnvironment,
         lpCurrentDirectory,
         lpStartupInfo,
@@ -1184,6 +1345,7 @@ pub unsafe extern "system" fn TrapCreateProcessA(
         );
         return FALSE;
     }
+    attachPayload(&*ppi, dwCreationFlags);
     if lpCommandLine != std::ptr::null_mut() {
         let _ = record_event(lpCommandLine, FileEventType::Exec)
             .map_err(|x| eprintln!("record failed in detouring process:{}", x));
@@ -1199,7 +1361,40 @@ pub unsafe extern "system" fn TrapCreateProcessA(
 
     return TRUE;
 }
+unsafe fn attachPayload(pi: &PROCESS_INFORMATION, dwCreationFlags: DWORD) {
+    let handle = &OUTPUT_FILE_HANDLE;
+    use winapi::um::winnt::DUPLICATE_SAME_ACCESS;
+    let dup = handle.duplicate(Handle::new(pi.hProcess), 0, true, DUPLICATE_SAME_ACCESS);
+    if let Err(_) = dup {
+        eprintln!(
+            "TRACEBLD: file handle duplication failed: {}\n",
+            winapi::um::errhandlingapi::GetLastError()
+        );
 
+        std::process::exit(9007);
+    }
+    static mut PAYLOAD: Payload = Payload{handle: std::ptr::null_mut()};
+	  PAYLOAD = Payload::new(dup.unwrap().raw());
+    if FALSE
+        == detours::DetourCopyPayloadToProcess(
+            pi.hProcess as _,
+            &S_TRAP_GUID as *const _ as _,
+            &PAYLOAD as *const _ as _,
+            std::mem::size_of::<Payload>() as _,
+        )
+    {
+        eprintln!(
+            "TRACEBLD: could not setup payload during dll injection: {}\n",
+            winapi::um::errhandlingapi::GetLastError()
+        );
+
+        std::process::exit(9008);
+    }
+    if (dwCreationFlags & CREATE_SUSPENDED) != CREATE_SUSPENDED {
+        use winapi::um::processthreadsapi::ResumeThread;
+        ResumeThread(pi.hThread);
+    }
+}
 pub unsafe extern "system" fn TrapCreateProcessW(
     lpApplicationName: LPCWSTR,
     lpCommandLine: LPWSTR,
@@ -1281,7 +1476,7 @@ pub unsafe extern "system" fn TrapCreateProcessW(
         lpProcessAttributes,
         lpThreadAttributes,
         bInheritHandles,
-        dwCreationFlags,
+        dwCreationFlags | CREATE_SUSPENDED,
         lpEnvironment,
         lpCurrentDirectory,
         lpStartupInfo,
@@ -1297,6 +1492,7 @@ pub unsafe extern "system" fn TrapCreateProcessW(
         );
         return FALSE;
     }
+    attachPayload(&*ppi, dwCreationFlags);
     if ppi == &mut pi as *mut _ {
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
