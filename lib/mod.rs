@@ -1,7 +1,9 @@
 extern crate detours_sys as detours;
-extern crate named_pipe;
-#[macro_use]
-extern crate wstr;
+//extern crate named_pipe;
+//#[macro_use]
+//extern crate wstr;
+extern crate wchar;
+
 extern crate ntapi;
 #[cfg(windows)]
 // #[macro_use]

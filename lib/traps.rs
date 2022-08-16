@@ -8,7 +8,7 @@ use detours::_PROCESS_INFORMATION as PROCESS_INFORMATION;
 // use named_pipe::PipeClient;
 use std::io::Write;
 use winapi::shared::ntdef::{NTSTATUS, PHANDLE, PLARGE_INTEGER, POBJECT_ATTRIBUTES};
-use winapi::um::libloaderapi::{GetModuleFileNameW};
+use winapi::um::libloaderapi::GetModuleFileNameW;
 use winapi::um::libloaderapi::{GetModuleHandleW, GetProcAddress};
 use winapi::um::processthreadsapi::{GetCurrentProcess, GetCurrentProcessId, GetCurrentThread};
 use winapi::um::winnt::ACCESS_MASK;
@@ -17,7 +17,9 @@ use detours::LPSECURITY_ATTRIBUTES;
 use detours::_GUID as GUID;
 use detours::{HINSTANCE, HMODULE};
 use ntapi::ntioapi::PIO_STATUS_BLOCK;
+use wchar::wch;
 use winapi::um::fileapi::INVALID_FILE_ATTRIBUTES;
+use winapi::um::winbase::CREATE_SUSPENDED;
 use winapi::um::winnt::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_TEMPORARY};
 use winapi::{
     shared::minwindef::{BOOL, DWORD, FALSE, FARPROC, LPBOOL, LPVOID, TRUE, UINT, ULONG},
@@ -30,7 +32,6 @@ use winapi::{
     },
     // um::synchapi::{InitializeCriticalSection},
 };
-use winapi::um::winbase::CREATE_SUSPENDED;
 macro_rules! attach_proc {
     ($dll:ident, $lit:literal, $e:ident, $m:ident) => {
         let realapi = GetProcAddress($dll as _, $lit.as_ptr() as _);
@@ -73,13 +74,13 @@ const OF_CREATE: u32 = 0x00001000;
 // const OF_EXIST:u32 = 0x00004000;
 // const OF_REOPEN:u32 = 0x00008000;
 
-pub const TUP_CREATE_WRITE_FLAGS: u32 = (GENERIC_WRITE
+pub const TUP_CREATE_WRITE_FLAGS: u32 = GENERIC_WRITE
     | FILE_WRITE_DATA
     | FILE_WRITE_ATTRIBUTES
     | FILE_WRITE_EA
     | FILE_APPEND_DATA
     | WRITE_OWNER
-    | WRITE_DAC);
+    | WRITE_DAC;
 pub const TUP_UNLINK_FLAGS: u32 = DELETE;
 // use std::ptr;
 use std::ffi::CStr;
@@ -127,9 +128,9 @@ static mut REAL_CREATEPROCESSW: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_NTCREATEFILE: FARPROC = std::ptr::null_mut() as _;
 static mut REAL_NTOPENFILE: FARPROC = std::ptr::null_mut() as _;
 pub use std::os::windows::io::RawHandle;
-#[derive(Copy,Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct Handle(RawHandle);
-static mut OUTPUT_FILE_HANDLE: Handle = Handle(std::ptr::null_mut() );
+static mut OUTPUT_FILE_HANDLE: Handle = Handle(std::ptr::null_mut());
 pub trait IsMinusOne {
     fn is_minus_one(&self) -> bool;
 }
@@ -153,7 +154,7 @@ pub fn cvt<T: IsMinusOne>(t: T) -> io::Result<T> {
 }
 impl Handle {
     fn raw(&self) -> HANDLE {
-        (self.0)
+        self.0
     }
     fn duplicate(
         &self,
@@ -282,7 +283,7 @@ fn record_event(lpFileName: LPCSTR, evt: FileEventType) -> std::result::Result<u
     let pid = unsafe { GetCurrentProcessId() };
     let fname = unsafe { CStr::from_ptr(lpFileName).to_str().unwrap() };
     // let mut client = PipeClient::connect(TBLOG_PIPE_NAME)?;
-    let file = unsafe{&OUTPUT_FILE_HANDLE};
+    let file = unsafe { &OUTPUT_FILE_HANDLE };
     if file.is_nul() {
         return Ok(0);
     }
@@ -322,7 +323,7 @@ fn record_event_wide_len(
     let name = unsafe { std::slice::from_raw_parts(lpFileName as *const u16, len as usize) };
     let u16str: OsString = OsStringExt::from_wide(name);
     // let mut client = PipeClient::connect(TBLOG_PIPE_NAME)?;
-    let file =  unsafe{&OUTPUT_FILE_HANDLE};
+    let file = unsafe { &OUTPUT_FILE_HANDLE };
     if file.is_nul() {
         return Ok(0);
     }
@@ -895,7 +896,7 @@ static mut S_HMSVCR: HINSTANCE = std::ptr::null_mut();
 // static mut s_pszMsvcr: *const u8 = std::ptr::null_mut();
 static S_RPSZMSVCRNAMES: [&'static str; 2] = [
     "API-MS-WIN-CORE-PROCESSENVIRONMENT-L1-2-0.DLL",
-    "msvcrt.dll"
+    "msvcrt.dll",
 ];
 
 #[cfg(target_arch = "x86_64")]
@@ -962,7 +963,7 @@ impl TrapInfo {
             let name = { std::slice::from_raw_parts(&dllpathw as *const u16, len as usize) };
             let u16str: OsString = OsStringExt::from_wide(name);
             DLLPATHW = u16str.to_str().unwrap().to_string();
-       }
+        }
         TrapInfo {
             hInst: hModule,
             // zDllPath: dllPath,
@@ -974,15 +975,15 @@ impl TrapInfo {
         self.hInst == std::ptr::null_mut() as _
     }
     pub unsafe fn attach(&self) {
-         let payload = Payload::findPayLoad();
+        let payload = Payload::findPayLoad();
         OUTPUT_FILE_HANDLE = Handle(payload.handle);
 
         use detours::DetourAttach;
         // std::thread::sleep_ms(20000); // uncomment for debug purposes
         detours::DetourUpdateThread(GetCurrentThread() as _);
-        let kstr = wstr!("kernel32\0");
-        let kbasestr = wstr!("kernelbase\0");
-        let nstr = wstr!("ntdll\0");
+        let kstr = wch!("kernel32\0");
+        let kbasestr = wch!("kernelbase\0");
+        let nstr = wch!("ntdll\0");
         let k32 = GetModuleHandleW(kstr.as_ptr());
         let kbase = GetModuleHandleW(kbasestr.as_ptr());
         attach_proc!(k32, "DeleteFileA\0", REAL_DELETEFILEA, TrapDeleteFileA);
@@ -1119,8 +1120,8 @@ impl TrapInfo {
         detach_proc!(REAL_DUPENV_S, Trap_dupenv_s);
         detach_proc!(REAL_WDUPENV_S, Trap_wdupenv_s);
         use winapi::um::handleapi::CloseHandle;
-        if !OUTPUT_FILE_HANDLE.is_nul(){
-		        CloseHandle(OUTPUT_FILE_HANDLE.0);
+        if !OUTPUT_FILE_HANDLE.is_nul() {
+            CloseHandle(OUTPUT_FILE_HANDLE.0);
         }
     }
 }
@@ -1282,8 +1283,7 @@ pub unsafe extern "system" fn TrapCreateProcessA(
     if iswow != FALSE {
         PXX = "tupinject32.dll";
     }
-    if let Some(dllpath) = std::path::PathBuf::from(DLLPATHW.as_str()).parent()
-    {
+    if let Some(dllpath) = std::path::PathBuf::from(DLLPATHW.as_str()).parent() {
         // println!("dllpath is:{:?}", dllpath);
         paths.push(dllpath.to_path_buf());
     }
@@ -1373,8 +1373,10 @@ unsafe fn attachPayload(pi: &PROCESS_INFORMATION, dwCreationFlags: DWORD) {
 
         std::process::exit(9007);
     }
-    static mut PAYLOAD: Payload = Payload{handle: std::ptr::null_mut()};
-	  PAYLOAD = Payload::new(dup.unwrap().raw());
+    static mut PAYLOAD: Payload = Payload {
+        handle: std::ptr::null_mut(),
+    };
+    PAYLOAD = Payload::new(dup.unwrap().raw());
     if FALSE
         == detours::DetourCopyPayloadToProcess(
             pi.hProcess as _,
