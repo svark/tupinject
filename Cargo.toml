@@ -15,5 +15,5 @@ crate-type=["cdylib"]
 wchar = "0.11.0"
 winapi = { version =  "0.3.9", features = ["winnt", "processthreadsapi", "fileapi", "winbase", "synchapi", "handleapi", "libloaderapi", "errhandlingapi", "wow64apiset"] }
 detours-sys = {git = "https://github.com/svark/detours", features = ["buildtime_bindgen"] }
-ntapi = "0.3.6"
+ntapi = "0.4.0"
  
