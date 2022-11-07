@@ -42,7 +42,7 @@ macro_rules! attach_proc {
 
 macro_rules! detach_proc {
     ($e:ident, $m:ident) => {
-        if $e != std::ptr::null_mut() {
+        if !$e.is_null(){
             detours::DetourDetach(&$e as *const _ as _, ($m as *const ()) as _);
         }
     };
@@ -203,7 +203,7 @@ impl Handle {
         Ok(amt as usize)
     }
     fn is_nul(&self) -> bool {
-        self.0 == std::ptr::null_mut()
+        self.0.is_null()
     }
     fn flush(&self) -> io::Result<()> {
         let handle = self.0;
@@ -262,15 +262,15 @@ impl Payload {
                 let pvData: *const Payload = unsafe {
                     detours::DetourFindPayload(hMod, &S_TRAP_GUID as _, &mut cbData as _) as _
                 };
-                if pvData != std::ptr::null() {
+                if !pvData.is_null(){
                     return pvData;
                 }
             }
             std::ptr::null() as _
         };
         let pPayload = finder();
-        if pPayload != std::ptr::null() {
-            unsafe { (*pPayload).clone() }
+        if !pPayload.is_null(){
+            unsafe { *pPayload}
         } else {
             unreachable!("Error: missing payload during dll injection");
             // Payload::new()
@@ -295,7 +295,7 @@ fn record_event(lpFileName: LPCSTR, evt: FileEventType) -> std::result::Result<u
         format!(
             "------\n{}\t{},\t{}----*----\n",
             fname,
-            pid.to_string(),
+            pid,
             evt.to_string()
         )
         .as_bytes(),
@@ -332,7 +332,7 @@ fn record_event_wide_len(
         format!(
             "----\n{}\t{}\t{}----*-----\n",
             u16str.to_str().unwrap(),
-            pid.to_string(),
+            pid,
             evt.to_string()
         )
         .as_bytes(),
@@ -894,7 +894,7 @@ const SIZEOFBIGPATH: u32 = 1024;
 // }
 static mut S_HMSVCR: HINSTANCE = std::ptr::null_mut();
 // static mut s_pszMsvcr: *const u8 = std::ptr::null_mut();
-static S_RPSZMSVCRNAMES: [&'static str; 2] = [
+static S_RPSZMSVCRNAMES: [&str; 2] = [
     "API-MS-WIN-CORE-PROCESSENVIRONMENT-L1-2-0.DLL",
     "msvcrt.dll",
 ];
@@ -902,7 +902,7 @@ static S_RPSZMSVCRNAMES: [&'static str; 2] = [
 #[cfg(target_arch = "x86_64")]
 pub unsafe extern "C" fn ImportFileCallback(_: PVOID, hFile: HINSTANCE, pszFile: PCSTR) -> BOOL {
     use std::ffi::CString;
-    if pszFile != std::ptr::null() {
+    if !pszFile.is_null() {
         let cpszFile = CStr::from_ptr(pszFile);
         if let Some(_s) = S_RPSZMSVCRNAMES
             .iter()
@@ -914,7 +914,7 @@ pub unsafe extern "C" fn ImportFileCallback(_: PVOID, hFile: HINSTANCE, pszFile:
             return FALSE;
         }
     }
-    return TRUE;
+    TRUE
 }
 #[cfg(target_arch = "x86")]
 pub unsafe extern "stdcall" fn ImportFileCallback(
@@ -953,7 +953,7 @@ impl TrapInfo {
     pub fn new(hModule: HMODULE) -> Self {
         unsafe {
             let mut dllpathw: BigPath = [0; SIZEOFBIGPATH as _];
-            GetModuleFileNameW(hModule as _, (&mut dllpathw).as_mut_ptr(), SIZEOFBIGPATH);
+            GetModuleFileNameW(hModule as _, dllpathw.as_mut_ptr(), SIZEOFBIGPATH);
             let p = { &dllpathw as *const u16 };
             let mut len = 0;
             while *p.offset(len) != 0 {
@@ -1149,7 +1149,7 @@ static mut REAL_GETENV_S: *mut Real_getenv_sType = std::ptr::null_mut() as _;
 static mut REAL_WGETENV_S: *mut Real_wgetenv_sType = std::ptr::null_mut() as _;
 static mut REAL_DUPENV_S: *mut Real_dupenv_sType = std::ptr::null_mut() as _;
 static mut REAL_WDUPENV_S: *mut Real_wdupenv_sType = std::ptr::null_mut() as _;
-fn record_env(var: PCSTR) -> std::result::Result<usize, Error> {
+fn record_env(var: PCSTR) -> std::io::Result<()> {
     let pid = unsafe { GetCurrentProcessId() };
     use std::fs::File;
     use std::fs::OpenOptions;
@@ -1158,11 +1158,11 @@ fn record_env(var: PCSTR) -> std::result::Result<usize, Error> {
         .append(true)
         .open(format!("evts-env-{}.txt", pid))?;
     let fname = unsafe { CStr::from_ptr(var).to_str().unwrap() };
-    file.write(fname.as_bytes())?;
-    file.write(b"\n")
+    file.write_all(fname.as_bytes())?;
+    file.write_all(b"\n")
 }
 
-fn record_env_wide(var: PCWSTR) -> std::result::Result<usize, Error> {
+fn record_env_wide(var: PCWSTR) -> std::io::Result<()> {
     let pid = unsafe { GetCurrentProcessId() };
     use std::fs::File;
     use std::fs::OpenOptions;
@@ -1180,23 +1180,26 @@ fn record_env_wide(var: PCWSTR) -> std::result::Result<usize, Error> {
     }
     let name = unsafe { std::slice::from_raw_parts(p as *const u16, len as usize) };
     let u16str: OsString = OsStringExt::from_wide(name);
-    file.write(u16str.to_str().unwrap().as_bytes())?;
-    file.write(b"\n")
+    file.write_all(u16str.to_str().unwrap().as_bytes())?;
+    file.write_all(b"\n")
 }
+/// records env access in a file (widechar version)
 pub unsafe extern "C" fn Trap_wgetenv(var: PCWSTR) -> PCWSTR {
     let ret = (*REAL_WGETENV)(var);
-    if ret != std::ptr::null() {
+    if !ret.is_null(){
         let _ = record_env_wide(var);
     }
     ret
 }
+/// records env access in a file (char version)
 pub unsafe extern "C" fn Trap_getenv(var: PCSTR) -> PCSTR {
     let ret = (*REAL_GETENV)(var);
-    if ret != std::ptr::null() {
+    if !ret.is_null() {
         let _ = record_env(var);
     }
     ret
 }
+/// records env access in a file(char version with supplied length)
 pub unsafe extern "C" fn Trap_getenv_s(
     pValue: *mut DWORD,
     pBuffer: PCHAR,
@@ -1291,7 +1294,7 @@ pub unsafe extern "system" fn TrapCreateProcessA(
         .iter()
         .map(|pb| pb.as_path().join(PXX))
         .find(|x| x.is_file())
-        .expect(format!("{} not found in path", PXX).as_str());
+        .unwrap_or_else(|| panic!("{} not found in path", PXX));
     let dllpath = std::ffi::CString::new(paths.to_str().unwrap());
     let dllpathptr = dllpath.unwrap();
     #[cfg(target_arch = "x86")]
@@ -1346,7 +1349,7 @@ pub unsafe extern "system" fn TrapCreateProcessA(
         return FALSE;
     }
     attachPayload(&*ppi, dwCreationFlags);
-    if lpCommandLine != std::ptr::null_mut() {
+    if !lpCommandLine.is_null(){
         let _ = record_event(lpCommandLine, FileEventType::Exec)
             .map_err(|x| eprintln!("record failed in detouring process:{}", x));
     } else {
@@ -1359,13 +1362,13 @@ pub unsafe extern "system" fn TrapCreateProcessA(
         CloseHandle(pi.hThread);
     }
 
-    return TRUE;
+    TRUE
 }
 unsafe fn attachPayload(pi: &PROCESS_INFORMATION, dwCreationFlags: DWORD) {
     let handle = &OUTPUT_FILE_HANDLE;
     use winapi::um::winnt::DUPLICATE_SAME_ACCESS;
     let dup = handle.duplicate(Handle::new(pi.hProcess), 0, true, DUPLICATE_SAME_ACCESS);
-    if let Err(_) = dup {
+    if dup.is_err() {
         eprintln!(
             "TRACEBLD: file handle duplication failed: {}\n",
             winapi::um::errhandlingapi::GetLastError()
@@ -1467,7 +1470,7 @@ pub unsafe extern "system" fn TrapCreateProcessW(
         .iter()
         .map(|pb| pb.as_path().join(PXX))
         .find(|x| x.is_file())
-        .expect(format!("{} not found in path", PXX).as_str());
+        .unwrap_or_else(|| panic!("{} not found in path", PXX));
     let dllpath = std::ffi::CString::new(paths.to_str().unwrap());
     let dllpathptr = dllpath.unwrap();
 
@@ -1499,7 +1502,7 @@ pub unsafe extern "system" fn TrapCreateProcessW(
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
     }
-    if lpCommandLine != std::ptr::null_mut() {
+    if !lpCommandLine.is_null() {
         let _ = record_event_wide(lpCommandLine, FileEventType::Exec)
             .map_err(|x| eprintln!("record failed in detouring process:{}", x));
     } else {
@@ -1507,7 +1510,7 @@ pub unsafe extern "system" fn TrapCreateProcessW(
             .map_err(|x| eprintln!("record failed in detouring process:{}", x));
     }
 
-    return TRUE;
+    TRUE
 }
 pub unsafe extern "system" fn TrapNtOpenFile(
     FileHandle: PHANDLE,
@@ -1536,7 +1539,7 @@ pub unsafe extern "system" fn TrapNtOpenFile(
     );
     let uni = (*ObjectAttributes).ObjectName;
     if ret == winapi::shared::ntstatus::STATUS_SUCCESS
-        && *FileHandle != std::ptr::null_mut()
+        && !FileHandle.is_null()
         && winapi::um::fileapi::GetFileType(*FileHandle) == winapi::um::winbase::FILE_TYPE_DISK
         && Some(false) == is_directory(*FileHandle)
     {
@@ -1601,7 +1604,7 @@ fn is_directory(filehandle: HANDLE) -> Option<bool> {
         if rc == 0 {
             return None;
         }
-        return Some(info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY) != 0);
+        Some(info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY) != 0)
     }
 }
 
@@ -1646,7 +1649,7 @@ pub unsafe extern "system" fn TrapNtCreateFile(
         EaLength,
     );
     if ret == winapi::shared::ntstatus::STATUS_SUCCESS
-        && *FileHandle != std::ptr::null_mut()
+        && !(*FileHandle).is_null()
         && winapi::um::fileapi::GetFileType(*FileHandle) == winapi::um::winbase::FILE_TYPE_DISK
         && Some(false) == is_directory(*FileHandle)
     {

@@ -48,10 +48,9 @@ impl DetoursTransaction {
 }
 impl DetoursProcessor {
     pub fn new(hmod: HMODULE) -> DetoursProcessor {
-        let processor = DetoursProcessor {
+        DetoursProcessor {
             trap_info: traps::TrapInfo::new(hmod),
-        };
-        processor
+        }
     }
     pub fn attach(&self, _: &DetoursTransaction) {
         unsafe { self.trap_info.attach() };
@@ -91,7 +90,7 @@ pub fn dll_processor(dll_module: HINSTANCE, reason: DWORD) -> BOOL {
             if (processor).need_skip() {
                 return TRUE;
             }
-            if let Err(_) = (processor).attach_hooks() {
+            if  processor.attach_hooks().is_err() {
                 return FALSE;
             }
         }
@@ -100,7 +99,7 @@ pub fn dll_processor(dll_module: HINSTANCE, reason: DWORD) -> BOOL {
             if processor.need_skip() {
                 return TRUE;
             }
-            if let Err(_) = processor.detach_hooks() {
+            if processor.detach_hooks().is_err() {
                 return FALSE;
             }
         }
@@ -109,7 +108,7 @@ pub fn dll_processor(dll_module: HINSTANCE, reason: DWORD) -> BOOL {
         }
     }
 
-    return TRUE;
+    TRUE
 }
 #[no_mangle]
 #[allow(non_snake_case, unused_variables)]
