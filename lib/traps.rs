@@ -42,7 +42,7 @@ macro_rules! attach_proc {
 
 macro_rules! detach_proc {
     ($e:ident, $m:ident) => {
-        if !$e.is_null(){
+        if !$e.is_null() {
             detours::DetourDetach(&$e as *const _ as _, ($m as *const ()) as _);
         }
     };
@@ -262,15 +262,15 @@ impl Payload {
                 let pvData: *const Payload = unsafe {
                     detours::DetourFindPayload(hMod, &S_TRAP_GUID as _, &mut cbData as _) as _
                 };
-                if !pvData.is_null(){
+                if !pvData.is_null() {
                     return pvData;
                 }
             }
             std::ptr::null() as _
         };
         let pPayload = finder();
-        if !pPayload.is_null(){
-            unsafe { *pPayload}
+        if !pPayload.is_null() {
+            unsafe { *pPayload }
         } else {
             unreachable!("Error: missing payload during dll injection");
             // Payload::new()
@@ -1186,7 +1186,7 @@ fn record_env_wide(var: PCWSTR) -> std::io::Result<()> {
 /// records env access in a file (widechar version)
 pub unsafe extern "C" fn Trap_wgetenv(var: PCWSTR) -> PCWSTR {
     let ret = (*REAL_WGETENV)(var);
-    if !ret.is_null(){
+    if !ret.is_null() {
         let _ = record_env_wide(var);
     }
     ret
@@ -1349,7 +1349,7 @@ pub unsafe extern "system" fn TrapCreateProcessA(
         return FALSE;
     }
     attachPayload(&*ppi, dwCreationFlags);
-    if !lpCommandLine.is_null(){
+    if !lpCommandLine.is_null() {
         let _ = record_event(lpCommandLine, FileEventType::Exec)
             .map_err(|x| eprintln!("record failed in detouring process:{}", x));
     } else {

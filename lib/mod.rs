@@ -90,7 +90,7 @@ pub fn dll_processor(dll_module: HINSTANCE, reason: DWORD) -> BOOL {
             if (processor).need_skip() {
                 return TRUE;
             }
-            if  processor.attach_hooks().is_err() {
+            if processor.attach_hooks().is_err() {
                 return FALSE;
             }
         }
